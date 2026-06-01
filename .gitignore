@@ -1,0 +1,41 @@
+# Secrets and local environment
+.env
+**/.env
+*.pem
+*.key
+
+# Python build/runtime files
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+*.log
+
+# Virtual environments
+.venv/
+**/.venv/
+venv/
+
+# Local runtime data
+*.db
+*.sqlite
+*.sqlite3
+*.tar
+*.tar.gz
+*.zip
+module_a_client/data/
+module_a_client/feedback_inbox/
+module_a_client/logs/
+module_a_client/workspace/
+module_b_server/data/
+module_c_controller/data/
+module_c_controller/feedback_outbox/
+module_c_controller/logs/
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
