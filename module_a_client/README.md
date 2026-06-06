@@ -1,6 +1,6 @@
-# Haocean MOOC Student CLI
+# Haocean Mooc Student CLI
 
-模块 A 是学生端命令行工具。学生不需要服务器上的 `/Hao/gongchuang/module_a_client` 目录；安装后直接在自己的 Linux 终端使用 `haocean`，配置、登录令牌、工作区和反馈默认保存在 `~/.haocean/`。
+模块 A 是学生端命令行工具。学生不需要服务器上的 `/Hao/gongchuang/module_a_client` 目录；安装后直接在自己的 Linux 终端使用 `haocean-student`，配置、登录令牌、工作区和反馈默认保存在 `~/.haocean/`。
 
 ## 安装
 
@@ -14,14 +14,14 @@ python3 -m pip install -e .
 安装后会得到命令：
 
 ```bash
-haocean --help
+haocean-student --help
 ```
 
 ## 首次配置
 
 ```bash
-haocean setup --student-id 2024001 --email student@example.com --class-code JOIN101
-haocean login
+haocean-student setup --student-id 2024001 --email student@example.com --class-code JOIN101
+haocean-student login
 ```
 
 默认服务地址是：
@@ -42,7 +42,7 @@ https://student.haoceanlab.cn
 老师给学生的是班级加入码，例如 `JOIN101`。如果首次配置时没有填写，也可以之后执行：
 
 ```bash
-haocean join JOIN101
+haocean-student join JOIN101
 ```
 
 ## 日常使用
@@ -50,13 +50,13 @@ haocean join JOIN101
 查看自己班级内开放作业：
 
 ```bash
-haocean list
+haocean-student list
 ```
 
 查看已加入班级：
 
 ```bash
-haocean classes
+haocean-student classes
 ```
 
 提交作业。学生把文件放入对应目录：
@@ -68,19 +68,31 @@ haocean classes
 然后运行：
 
 ```bash
-haocean submit home_001
+haocean-student submit home_001
 ```
+
+提交前可先预览本次打包内容：
+
+```bash
+haocean-student submit home_001 --dry-run
+# 或
+haocean-student preview home_001
+```
+
+默认只会打包常见作业文件（如 `.py/.md/.pdf/.ipynb/.jpg` 等），并自动排除
+`.git/`、`.venv/`、`venv/`、`__pycache__/`、`node_modules/`、`*.log`、`*.db`、`*.zip` 等缓存/历史压缩包。
+如果确实要提交压缩包，需显式加 `--allow-zip`。
 
 持续监控并自动提交：
 
 ```bash
-haocean watch
+haocean-student watch
 ```
 
 拉取教师反馈：
 
 ```bash
-haocean feedback
+haocean-student feedback
 ```
 
 ## 配置

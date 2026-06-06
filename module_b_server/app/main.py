@@ -1,4 +1,5 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import base64
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
@@ -32,6 +33,9 @@ except ModuleNotFoundError:
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
+NEW_API_ENV_FILE = os.getenv("MODULE_B_NEW_API_ENV_FILE", "")
+if NEW_API_ENV_FILE:
+    load_dotenv(NEW_API_ENV_FILE, override=False)
 DATA_DIR = ROOT_DIR / "data"
 DB_DIR = DATA_DIR / "db"
 TMP_DIR = DATA_DIR / "tmp"
@@ -39,7 +43,7 @@ SUBMISSIONS_DIR = DATA_DIR / "submissions"
 FEEDBACK_DIR = DATA_DIR / "feedback"
 DB_PATH = DB_DIR / "engine.db"
 
-SYSTEM_NAME = os.getenv("MODULE_B_SYSTEM_NAME", "HaoceanLab Course")
+SYSTEM_NAME = os.getenv("MODULE_B_SYSTEM_NAME", "Haocean Mooc")
 AUTH_REQUIRED = os.getenv("MODULE_B_AUTH_REQUIRED", "false").lower() in {"1", "true", "yes", "on"}
 VERIFICATION_VALID_SECONDS = int(os.getenv("MODULE_B_VERIFICATION_VALID_SECONDS", "600"))
 SESSION_VALID_SECONDS = int(os.getenv("MODULE_B_SESSION_VALID_SECONDS", str(7 * 24 * 3600)))
@@ -65,6 +69,7 @@ SMTP_FORCE_AUTH_LOGIN = os.getenv(
 SMTP_ACCOUNT = os.getenv("SMTPAccount", os.getenv("SMTP_ACCOUNT", ""))
 SMTP_FROM = os.getenv("SMTPFrom", os.getenv("SMTP_FROM", SMTP_ACCOUNT))
 SMTP_TOKEN = os.getenv("SMTPToken", os.getenv("SMTP_TOKEN", ""))
+SMTP_LOGIN_AUTH_SERVERS = {"smtp.sendcloud.net", "smtp.azurecomm.net"}
 
 ROLE_STUDENT = "student"
 ROLE_TEACHER = "teacher"
@@ -375,6 +380,39 @@ def smtp_configured() -> bool:
     return bool(SMTP_SERVER and SMTP_ACCOUNT and SMTP_TOKEN and SMTP_FROM)
 
 
+def should_use_smtp_login_auth() -> bool:
+    server = SMTP_SERVER.lower()
+    account = SMTP_ACCOUNT.lower()
+    return (
+        SMTP_FORCE_AUTH_LOGIN
+        or "outlook" in server
+        or "onmicrosoft" in server
+        or "outlook" in account
+        or "onmicrosoft" in account
+        or server in SMTP_LOGIN_AUTH_SERVERS
+    )
+
+
+def login_smtp_client(client: smtplib.SMTP) -> None:
+    if not should_use_smtp_login_auth():
+        client.login(SMTP_ACCOUNT, SMTP_TOKEN)
+        return
+
+    code, response = client.docmd("AUTH", "LOGIN")
+    if code != 334:
+        raise smtplib.SMTPAuthenticationError(code, response)
+
+    username = base64.b64encode(SMTP_ACCOUNT.encode("utf-8")).decode("ascii")
+    code, response = client.docmd(username)
+    if code != 334:
+        raise smtplib.SMTPAuthenticationError(code, response)
+
+    password = base64.b64encode(SMTP_TOKEN.encode("utf-8")).decode("ascii")
+    code, response = client.docmd(password)
+    if code != 235:
+        raise smtplib.SMTPAuthenticationError(code, response)
+
+
 def send_email(subject: str, receiver: str, html_content: str) -> None:
     if not smtp_configured():
         raise RuntimeError("SMTP server is not configured")
@@ -390,13 +428,13 @@ def send_email(subject: str, receiver: str, html_content: str) -> None:
     if SMTP_PORT == 465 or SMTP_SSL_ENABLED:
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context, timeout=10) as client:
-            client.login(SMTP_ACCOUNT, SMTP_TOKEN)
+            login_smtp_client(client)
             client.send_message(message)
         return
 
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=10) as client:
         client.starttls(context=ssl.create_default_context())
-        client.login(SMTP_ACCOUNT, SMTP_TOKEN)
+        login_smtp_client(client)
         client.send_message(message)
 
 
@@ -1246,79 +1284,115 @@ async def create_submission(
     }
 
 
-@app.get("/v1/submissions/pending")
-def list_pending_submissions(
-    auth: AuthContext | None = Depends(require_teacher),
-):
-    """
-    B -> C 待批改列表接口。
-    C 端后面就调用这个接口，渲染老师/助教的 TUI 列表。
-    """
+def normalize_submission_status_filter(status: str) -> str:
+    normalized = status.strip().lower() or "pending"
+    if normalized == "approved":
+        normalized = "graded"
+    allowed = {"pending", "graded", "rejected", "all"}
+    if normalized not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": 400,
+                "message": "status must be pending, graded, rejected, approved, or all",
+            },
+        )
+    return normalized
+
+
+def build_submissions_response(
+    status: str,
+    assignment_id: str | None,
+    auth: AuthContext | None,
+) -> dict:
+    status_filter = normalize_submission_status_filter(status)
+    assignment_filter = assignment_id.strip() if assignment_id else ""
     auth = resolved_auth(auth)
     conn = get_conn()
+    where = []
+    params: list[object] = []
+    if status_filter != "all":
+        where.append("s.status = ?")
+        params.append(status_filter)
+    if assignment_filter:
+        where.append("s.assignment_id = ?")
+        params.append(assignment_filter)
     if auth is not None:
-        rows = conn.execute(
-            """
-            SELECT
-                s.submission_id,
-                s.student_id,
-                s.assignment_id,
-                s.file_name,
-                s.file_path,
-                s.md5,
-                s.submit_time,
-                s.status,
-                a.class_id,
-                a.title AS assignment_title,
-                c.class_name
-            FROM submissions s
-            JOIN assignments a ON a.assignment_id = s.assignment_id
-            LEFT JOIN classes c ON c.class_id = a.class_id
-            WHERE s.status = 'pending'
-              AND (
-                    a.created_by = ?
-                    OR c.teacher_id = ?
-              )
-            ORDER BY s.submit_time ASC;
-            """,
-            (auth.display_id, auth.display_id),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT
-                s.submission_id,
-                s.student_id,
-                s.assignment_id,
-                s.file_name,
-                s.file_path,
-                s.md5,
-                s.submit_time,
-                s.status,
-                a.class_id,
-                a.title AS assignment_title,
-                c.class_name
-            FROM submissions s
-            LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
-            LEFT JOIN classes c ON c.class_id = a.class_id
-            WHERE s.status = 'pending'
-            ORDER BY s.submit_time ASC;
-            """
-        ).fetchall()
+        where.append("(a.created_by = ? OR c.teacher_id = ?)")
+        params.extend([auth.display_id, auth.display_id])
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+    rows = conn.execute(
+        f"""
+        SELECT
+            s.submission_id,
+            s.student_id,
+            s.assignment_id,
+            s.file_name,
+            s.file_path,
+            s.md5,
+            s.submit_time,
+            s.status,
+            s.score,
+            s.comment,
+            s.feedback_path,
+            a.class_id,
+            a.title AS assignment_title,
+            c.class_name
+        FROM submissions s
+        LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        {where_sql}
+        ORDER BY s.submit_time DESC, s.submission_id DESC;
+        """,
+        params,
+    ).fetchall()
     conn.close()
+
     submissions = []
+    summary = {"total": 0, "pending": 0, "graded": 0, "rejected": 0}
     for row in rows:
         item = dict(row)
         item["download_url"] = f"/v1/submissions/{item['submission_id']}/download"
         submissions.append(item)
+        summary["total"] += 1
+        if item["status"] in summary:
+            summary[item["status"]] += 1
 
     return {
         "code": 200,
-        "message": "pending submissions returned",
+        "message": "submissions returned",
         "payload": {
-            "submissions": submissions
+            "status": status_filter,
+            "assignment_id": assignment_filter or None,
+            "summary": summary,
+            "submissions": submissions,
         },
     }
+
+
+@app.get("/v1/submissions")
+def list_submissions(
+    status: str = "pending",
+    assignment_id: str | None = None,
+    auth: AuthContext | None = Depends(require_teacher),
+):
+    """
+    B -> C 提交列表接口。
+    status 支持 pending / graded / rejected / approved / all。
+    """
+    return build_submissions_response(status, assignment_id, auth)
+
+
+@app.get("/v1/submissions/pending")
+def list_pending_submissions(
+    assignment_id: str | None = None,
+    auth: AuthContext | None = Depends(require_teacher),
+):
+    """
+    B -> C 待批改列表接口。保留旧路径兼容现有 C 端。
+    """
+    return build_submissions_response("pending", assignment_id, auth)
 
 
 @app.get("/v1/submissions/{submission_id}/download")
@@ -1473,9 +1547,18 @@ def grade_submission(
 
     row = conn.execute(
         """
-        SELECT submission_id, student_id, assignment_id, file_name, status
-        FROM submissions
-        WHERE submission_id = ?;
+        SELECT
+            s.submission_id,
+            s.student_id,
+            s.assignment_id,
+            s.file_name,
+            s.status,
+            a.created_by,
+            c.teacher_id AS class_teacher_id
+        FROM submissions s
+        LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        WHERE s.submission_id = ?;
         """,
         (p.submission_id,),
     ).fetchone()
@@ -1490,13 +1573,17 @@ def grade_submission(
             },
         )
 
-    if row["status"] != "pending":
+    if auth is not None and row["created_by"] != teacher_id and row["class_teacher_id"] != teacher_id:
+        conn.close()
+        raise create_auth_error("teacher can only grade own class submissions", 403)
+
+    if row["status"] not in {"pending", "graded", "rejected"}:
         conn.close()
         raise HTTPException(
             status_code=400,
             detail={
                 "code": 400,
-                "message": "submission is not pending",
+                "message": "submission cannot be graded in current status",
             },
         )
 
@@ -1551,8 +1638,10 @@ def grade_submission(
             "student_id": student_id,
             "assignment_id": assignment_id,
             "score": p.score,
+            "comment": p.comment,
             "status": p.status,
             "feedback_path": str(feedback_file),
+            "graded_at": graded_at,
         },
     }
 
@@ -1662,6 +1751,12 @@ def init_extra_db():
     add_column_if_missing(
         conn,
         "assignments",
+        "peer_review_stage",
+        "peer_review_stage TEXT NOT NULL DEFAULT 'setup'",
+    )
+    add_column_if_missing(
+        conn,
+        "assignments",
         "teacher_weight",
         "teacher_weight REAL NOT NULL DEFAULT 0.7",
     )
@@ -1738,6 +1833,18 @@ def init_extra_db():
             comment TEXT,
             created_at TEXT NOT NULL,
             UNIQUE(submission_id, reviewer_student_id)
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS peer_review_tasks (
+            task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            assignment_id TEXT NOT NULL,
+            reviewer_student_id TEXT NOT NULL,
+            submission_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(assignment_id, reviewer_student_id, submission_id)
         );
         """
     )
@@ -2077,6 +2184,7 @@ def config_peer_review(
         """
         UPDATE assignments
         SET peer_review_enabled = ?,
+            peer_review_stage = 'setup',
             teacher_weight = ?,
             peer_weight = ?,
             bonus_threshold_1 = ?,
@@ -2110,9 +2218,152 @@ def config_peer_review(
         "payload": {
             "assignment_id": p.assignment_id,
             "peer_review_enabled": p.enabled,
+            "peer_review_stage": "setup",
             "teacher_weight": p.teacher_weight,
             "peer_weight": p.peer_weight,
         },
+    }
+
+
+class PeerReviewStagePayload(BaseModel):
+    stage: str
+
+
+class PeerReviewStageRequest(BaseModel):
+    action: str
+    timestamp: int
+    payload: PeerReviewStagePayload
+
+
+PEER_REVIEW_STAGES = {"setup", "submission", "peer_review", "final_calculation", "closed"}
+
+
+@app.post("/v1/assignments/{assignment_id}/peer-review/stage")
+def set_peer_review_stage(
+    assignment_id: str,
+    req: PeerReviewStageRequest,
+    auth: AuthContext | None = Depends(require_teacher),
+):
+    if req.action != "SET_PEER_REVIEW_STAGE":
+        raise HTTPException(
+            status_code=400,
+            detail={"code": 400, "message": "action must be SET_PEER_REVIEW_STAGE"},
+        )
+    stage = req.payload.stage.strip()
+    if stage not in PEER_REVIEW_STAGES:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": 400, "message": "invalid peer review stage"},
+        )
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE assignments SET peer_review_stage = ? WHERE assignment_id = ?;",
+        (stage, assignment_id),
+    )
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": 400, "message": "assignment_id does not exist"},
+        )
+    return {
+        "code": 200,
+        "message": "peer review stage updated",
+        "payload": {"assignment_id": assignment_id, "stage": stage},
+    }
+
+
+@app.post("/v1/assignments/{assignment_id}/peer-review/tasks/auto")
+def auto_assign_peer_review_tasks(
+    assignment_id: str,
+    auth: AuthContext | None = Depends(require_teacher),
+):
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT submission_id, student_id
+        FROM submissions
+        WHERE assignment_id = ?
+        ORDER BY submit_time ASC, submission_id ASC;
+        """,
+        (assignment_id,),
+    ).fetchall()
+    if len(rows) < 2:
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail={"code": 400, "message": "at least two submissions are required"},
+        )
+    conn.execute("DELETE FROM peer_review_tasks WHERE assignment_id = ?;", (assignment_id,))
+    tasks = []
+    for index, row in enumerate(rows):
+        target = rows[(index + 1) % len(rows)]
+        conn.execute(
+            """
+            INSERT INTO peer_review_tasks (
+                assignment_id, reviewer_student_id, submission_id, created_at
+            )
+            VALUES (?, ?, ?, ?);
+            """,
+            (assignment_id, row["student_id"], target["submission_id"], now_str()),
+        )
+        tasks.append(
+            {
+                "assignment_id": assignment_id,
+                "reviewer_student_id": row["student_id"],
+                "submission_id": target["submission_id"],
+            }
+        )
+    conn.commit()
+    conn.close()
+    return {
+        "code": 200,
+        "message": "peer review tasks assigned",
+        "payload": {"assignment_id": assignment_id, "tasks": tasks},
+    }
+
+
+@app.get("/v1/peer-review/tasks/my")
+def list_my_peer_review_tasks(
+    assignment_id: str | None = None,
+    student_id: str = "",
+    auth: AuthContext | None = Depends(require_student),
+):
+    auth = resolved_auth(auth)
+    effective_student_id = auth.display_id if auth is not None else student_id.strip()
+    if not effective_student_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": 400, "message": "student_id is required"},
+        )
+    where = ["prt.reviewer_student_id = ?"]
+    params: list[object] = [effective_student_id]
+    if assignment_id:
+        where.append("prt.assignment_id = ?")
+        params.append(assignment_id.strip())
+    conn = get_conn()
+    rows = conn.execute(
+        f"""
+        SELECT
+            prt.assignment_id,
+            prt.reviewer_student_id,
+            prt.submission_id,
+            s.student_id AS target_student_id,
+            a.title AS assignment_title
+        FROM peer_review_tasks prt
+        JOIN submissions s ON s.submission_id = prt.submission_id
+        LEFT JOIN assignments a ON a.assignment_id = prt.assignment_id
+        WHERE {" AND ".join(where)}
+        ORDER BY prt.assignment_id ASC, prt.submission_id ASC;
+        """,
+        params,
+    ).fetchall()
+    conn.close()
+    return {
+        "code": 200,
+        "message": "peer review tasks returned",
+        "payload": {"tasks": [dict(row) for row in rows]},
     }
 
 
@@ -2201,7 +2452,7 @@ def submit_peer_review(
 
     assignment = conn.execute(
         """
-        SELECT assignment_id, peer_review_enabled
+        SELECT assignment_id, peer_review_enabled, peer_review_stage
         FROM assignments
         WHERE assignment_id = ?;
         """,
@@ -2217,6 +2468,45 @@ def submit_peer_review(
                 "message": "peer review is not enabled for this assignment",
             },
         )
+
+    if assignment["peer_review_stage"] not in {"peer_review", "final_calculation"}:
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": 400,
+                "message": "peer review stage is not open",
+            },
+        )
+
+    task_count = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM peer_review_tasks
+        WHERE assignment_id = ?;
+        """,
+        (assignment_id,),
+    ).fetchone()["count"]
+    if task_count:
+        task = conn.execute(
+            """
+            SELECT task_id
+            FROM peer_review_tasks
+            WHERE assignment_id = ?
+              AND reviewer_student_id = ?
+              AND submission_id = ?;
+            """,
+            (assignment_id, reviewer_student_id, p.submission_id),
+        ).fetchone()
+        if task is None:
+            conn.close()
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": 403,
+                    "message": "submission is not assigned to this reviewer",
+                },
+            )
 
     old_review = conn.execute(
         """
@@ -2739,21 +3029,166 @@ class ArchiveRequest(BaseModel):
     payload: ArchivePayload
 
 
-def add_file_or_dir_to_zip(zipf, source_path: Path, arc_prefix: str):
-    """
-    把文件或目录加入 zip 包。
-    arc_prefix 是压缩包内部的目录名。
-    """
-    if not source_path.exists():
+ARCHIVE_ALLOWED_EXTENSIONS = {
+    ".py",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".java",
+    ".js",
+    ".html",
+    ".css",
+    ".md",
+    ".txt",
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".ipynb",
+    ".png",
+    ".jpg",
+    ".jpeg",
+}
+ARCHIVE_EXCLUDED_DIRS = {
+    "__pycache__",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    ".mypy_cache",
+    ".pytest_cache",
+}
+ARCHIVE_EXCLUDED_NAMES = {".DS_Store", "Thumbs.db"}
+ARCHIVE_EXCLUDED_SUFFIXES = {
+    ".pyc",
+    ".pyo",
+    ".log",
+    ".tmp",
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".7z",
+    ".rar",
+}
+
+
+def sanitize_archive_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip()).strip("_") or "item"
+
+
+def should_skip_archive_member(member_path: PurePosixPath) -> bool:
+    parts = member_path.parts
+    if member_path.is_absolute() or ".." in parts:
+        return True
+    if any(part in ARCHIVE_EXCLUDED_DIRS for part in parts[:-1]):
+        return True
+
+    file_name = parts[-1] if parts else ""
+    if file_name in ARCHIVE_EXCLUDED_NAMES:
+        return True
+
+    suffix = Path(file_name).suffix.lower()
+    if suffix in ARCHIVE_EXCLUDED_SUFFIXES:
+        return True
+    if suffix not in ARCHIVE_ALLOWED_EXTENSIONS:
+        return True
+    return False
+
+
+def dedup_archive_name(file_name: str, used_names: set[str]) -> str:
+    if file_name not in used_names:
+        used_names.add(file_name)
+        return file_name
+
+    stem = Path(file_name).stem
+    suffix = Path(file_name).suffix
+    index = 2
+    while True:
+        candidate = f"{stem}_{index}{suffix}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        index += 1
+
+
+def iter_submission_archive_files(archive_path: Path):
+    try:
+        with tarfile.open(archive_path, "r:*") as tar:
+            for member in tar.getmembers():
+                if not member.isfile():
+                    continue
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                yield PurePosixPath(member.name), extracted.read()
+        return
+    except tarfile.TarError:
+        pass
+
+    try:
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            for member in zf.infolist():
+                if member.is_dir():
+                    continue
+                member_path = PurePosixPath(member.filename)
+                yield member_path, zf.read(member)
+    except zipfile.BadZipFile:
         return
 
-    if source_path.is_file():
-        zipf.write(source_path, arcname=str(Path(arc_prefix) / source_path.name))
-        return
 
-    for p in source_path.rglob("*"):
-        if p.is_file():
-            zipf.write(p, arcname=str(Path(arc_prefix) / p.relative_to(source_path)))
+def export_submission_files_to_zip(zipf, assignment_root: str) -> int:
+    conn = get_conn()
+    submissions = conn.execute(
+        """
+        SELECT submission_id, student_id, assignment_id, file_path
+        FROM submissions
+        ORDER BY submit_time ASC, submission_id ASC;
+        """
+    ).fetchall()
+    conn.close()
+
+    exported_count = 0
+    used_names: set[str] = set()
+    for row in submissions:
+        submission_id = int(row["submission_id"])
+        student_id = sanitize_archive_component(str(row["student_id"]))
+        assignment_id = sanitize_archive_component(str(row["assignment_id"]))
+        archive_path = Path(str(row["file_path"]))
+        if not archive_path.exists():
+            continue
+
+        for member_path, data in iter_submission_archive_files(archive_path):
+            if should_skip_archive_member(member_path):
+                continue
+            safe_original_name = sanitize_archive_component(member_path.name)
+            prefixed_name = (
+                f"{assignment_id}_{student_id}_{submission_id}_{safe_original_name}"
+            )
+            final_name = dedup_archive_name(prefixed_name, used_names)
+            zipf.writestr(f"{assignment_root}/{final_name}", data)
+            exported_count += 1
+
+    return exported_count
+
+
+def get_archive_assignment_root() -> str:
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT assignment_id
+        FROM submissions
+        ORDER BY assignment_id ASC;
+        """
+    ).fetchall()
+    conn.close()
+    assignment_ids = [sanitize_archive_component(str(row["assignment_id"])) for row in rows]
+    if len(assignment_ids) == 1:
+        return f"assignment_{assignment_ids[0]}_homework_files"
+    return "assignment_all_homework_files"
 
 
 def backup_sqlite_db(target_path: Path):
@@ -2813,25 +3248,10 @@ def create_course_archive(
             },
         )
 
-    tmp_db_path = ARCHIVE_DIR / f"{archive_name}.engine.db.tmp"
-
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-        if p.include_db:
-            backup_sqlite_db(tmp_db_path)
-            zipf.write(tmp_db_path, arcname="database/engine.db")
-            tmp_db_path.unlink(missing_ok=True)
-
+        assignment_root = get_archive_assignment_root()
         if p.include_submissions:
-            add_file_or_dir_to_zip(zipf, SUBMISSIONS_DIR, "submissions")
-
-        if p.include_feedback:
-            add_file_or_dir_to_zip(zipf, FEEDBACK_DIR, "feedback")
-
-        if p.include_docs:
-            add_file_or_dir_to_zip(zipf, PROJECT_DIR / "docs", "docs")
-            readme_path = ROOT_DIR / "README.md"
-            if readme_path.exists():
-                zipf.write(readme_path, arcname="README.md")
+            export_submission_files_to_zip(zipf, assignment_root)
 
     conn = get_conn()
     conn.execute(

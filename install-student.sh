@@ -30,14 +30,18 @@ fi
 "$VENV_DIR/bin/python" -m pip install --upgrade \
   "git+$REPO_URL@$REF#subdirectory=module_a_client"
 
-ln -sf "$VENV_DIR/bin/haocean" "$BIN_DIR/haocean"
+LEGACY_BIN="$BIN_DIR/haocean"
+if [ -L "$LEGACY_BIN" ] && [ "$(readlink "$LEGACY_BIN")" = "$VENV_DIR/bin/haocean" ]; then
+  rm -f "$LEGACY_BIN"
+fi
+ln -sf "$VENV_DIR/bin/haocean-student" "$BIN_DIR/haocean-student"
 
 echo "Haocean student CLI installed."
-echo "Command: $BIN_DIR/haocean"
+echo "Command: $BIN_DIR/haocean-student"
 echo
-echo "If 'haocean' is not found, add this to your shell profile:"
+echo "If 'haocean-student' is not found, add this to your shell profile:"
 echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
 echo
 echo "Next:"
-echo "  haocean setup --student-id 2024001 --email student@example.com --class-code JOIN101"
-echo "  haocean login"
+echo "  haocean-student setup --student-id 2024001 --email student@example.com --class-code JOIN101"
+echo "  haocean-student login"

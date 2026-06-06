@@ -4,7 +4,8 @@ import argparse
 import logging
 
 from .api_client import ModuleBClient
-from .auth import ensure_student_auth
+from .archive import preview_assignment_archive
+from .auth import ensure_student_auth, read_cached_token, render_startup
 from .config import DEFAULT_SERVER_URL, Settings, load_settings, write_user_config
 from .feedback import save_feedback_items
 from .logger import configure_logging
@@ -12,8 +13,8 @@ from .watcher import AssignmentWatcher
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Haocean MOOC student CLI")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(description="Haocean Mooc student CLI")
+    subparsers = parser.add_subparsers(dest="command")
     setup = subparsers.add_parser("setup", help="Write ~/.haocean/config.json")
     setup.add_argument("--server-url", default="", help=f"Backend URL, default {DEFAULT_SERVER_URL}")
     setup.add_argument("--student-id", default="", help="Student display ID")
@@ -30,6 +31,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("once", help="Run one sync cycle")
     submit = subparsers.add_parser("submit", help="Submit one assignment from the local workspace")
     submit.add_argument("assignment_id", nargs="?", default="", help="Assignment ID")
+    submit.add_argument("--dry-run", action="store_true", help="Preview files before submitting")
+    submit.add_argument("--allow-zip", action="store_true", help="Allow nested archive files (*.zip, *.tar, *.gz, *.7z, *.rar)")
+    preview = subparsers.add_parser("preview", help="Preview submission package without upload")
+    preview.add_argument("assignment_id", nargs="?", default="", help="Assignment ID")
+    preview.add_argument("--allow-zip", action="store_true", help="Allow nested archive files (*.zip, *.tar, *.gz, *.7z, *.rar)")
+    peer_review = subparsers.add_parser("peer-review", help="Submit a peer review score")
+    peer_review.add_argument("submission_id", type=int, help="Submission ID to review")
+    peer_review.add_argument("score", type=int, help="Peer review score, 0-100")
+    peer_review.add_argument("--comment", default="", help="Peer review comment")
     subparsers.add_parser("watch", help="Run background watcher")
     return parser
 
@@ -49,6 +59,17 @@ def _ensure_auth(client: ModuleBClient, settings: Settings) -> str:
     if student_id:
         object.__setattr__(settings, "student_id", student_id)
     return settings.student_id
+
+
+def _has_cached_auth(settings: Settings) -> bool:
+    return bool(settings.auth_token.strip() or read_cached_token(settings.auth_token_file))
+
+
+def _render_login_startup_if_needed(settings: Settings) -> bool:
+    if _has_cached_auth(settings):
+        return False
+    render_startup("Student", settings.server_url)
+    return True
 
 
 def _join_class(client: ModuleBClient, settings: Settings, class_code: str) -> None:
@@ -94,7 +115,56 @@ def _handle_setup(args: argparse.Namespace, settings: Settings) -> None:
     updated_settings.workspace_dir.mkdir(parents=True, exist_ok=True)
     print(f"Config     : {config_path}")
     print(f"Workspace  : {updated_settings.workspace_dir}")
-    print("Next       : haocean login")
+    print("Next       : haocean-student login")
+
+
+def _ensure_student_profile(settings: Settings) -> Settings:
+    config_path = settings.config_dir / "config.json"
+    has_config = config_path.exists()
+    student_id = settings.student_id.strip()
+    email = settings.email.strip()
+    class_code = settings.class_code.strip()
+
+    if has_config and student_id and email:
+        return settings
+
+    if not student_id:
+        student_id = input("Student ID : ").strip()
+    if not email:
+        email = input("Email      : ").strip()
+    if not class_code:
+        class_code = input("Class Code (optional): ").strip()
+    if not student_id:
+        raise SystemExit("student_id is required")
+    if not email:
+        raise SystemExit("email is required")
+
+    updates = {
+        "server_url": settings.server_url or DEFAULT_SERVER_URL,
+        "student_id": student_id,
+        "email": email,
+        "class_code": class_code,
+    }
+    config_path = write_user_config(settings.config_dir, updates)
+    updated_settings = load_settings(settings.project_root, config_dir=settings.config_dir)
+    updated_settings.workspace_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Config     : {config_path}")
+    return updated_settings
+
+
+def _run_login_flow(
+    client: ModuleBClient,
+    settings: Settings,
+    *,
+    startup_rendered: bool = False,
+) -> None:
+    student_id = ensure_student_auth(client, settings, show_startup=not startup_rendered)
+    if student_id:
+        object.__setattr__(settings, "student_id", student_id)
+    _join_configured_class(client, settings)
+    print(f"Student    : {settings.student_id}")
+    print(f"Workspace  : {settings.workspace_dir}")
+    print("Next       : haocean-student list")
 
 
 def _print_assignments(client: ModuleBClient, settings: Settings) -> None:
@@ -125,7 +195,7 @@ def _print_classes(client: ModuleBClient, settings: Settings) -> None:
         print(f"{item.class_id}\t{item.course_title}\t{item.class_name}\t{item.joined_at or ''}")
 
 
-def _run_sync(settings: Settings, client: ModuleBClient) -> None:
+def _run_sync(settings: Settings, client: ModuleBClient, *, allow_zip: bool = False) -> None:
     watcher = AssignmentWatcher(
         client=client,
         student_id=settings.student_id,
@@ -135,8 +205,41 @@ def _run_sync(settings: Settings, client: ModuleBClient) -> None:
         debounce_seconds=settings.debounce_seconds,
         poll_interval_seconds=settings.poll_interval_seconds,
         assignment_filter=settings.assignment_filter,
+        allow_zip=allow_zip,
     )
     watcher.sync_until_stable()
+
+
+def _print_preview(settings: Settings, assignment_id: str, allow_zip: bool) -> None:
+    assignment_dir = settings.workspace_dir / assignment_id
+    preview = preview_assignment_archive(
+        assignment_dir=assignment_dir,
+        cache_dir=settings.cache_dir,
+        student_id=settings.student_id,
+        assignment_id=assignment_id,
+        allow_zip=allow_zip,
+    )
+    print(f"assignment_id: {preview.assignment_id}")
+    print(f"workspace: {preview.workspace_path}")
+    print(f"temp_archive_path: {preview.archive_path}")
+    print("included_files:")
+    if preview.included_files:
+        for item in preview.included_files:
+            print(f"  - {item}")
+    else:
+        print("  - <none>")
+    print("excluded_files:")
+    if preview.excluded_files:
+        for item in preview.excluded_files:
+            print(f"  - {item.relative_path} ({item.reason})")
+    else:
+        print("  - <none>")
+    print("archive_members:")
+    if preview.archive_members:
+        for item in preview.archive_members:
+            print(f"  - {item}")
+    else:
+        print("  - <none>")
 
 
 def main() -> None:
@@ -148,14 +251,29 @@ def main() -> None:
         _handle_setup(args, settings)
         return
 
+    if args.command in {None, "login"}:
+        startup_rendered = _render_login_startup_if_needed(settings)
+        settings = _ensure_student_profile(settings)
+        client = _build_client(settings)
+        _run_login_flow(client, settings, startup_rendered=startup_rendered)
+        return
+
+    if args.command in {"once", "submit", "preview"} and not settings.assignment_filter:
+        assignment_id = args.assignment_id.strip() if args.command in {"submit", "preview"} else ""
+        if not assignment_id:
+            assignment_id = input("Assignment ID: ").strip()
+        if not assignment_id:
+            raise SystemExit("assignment_id is required")
+        object.__setattr__(settings, "assignment_filter", assignment_id)
+
+    if args.command in {"submit", "preview"} and (getattr(args, "dry_run", False) or args.command == "preview"):
+        if not settings.student_id:
+            raise SystemExit("student_id is required for preview (run haocean-student setup first)")
+        _print_preview(settings, settings.assignment_filter, getattr(args, "allow_zip", False))
+        return
+
     client = _build_client(settings)
     _ensure_auth(client, settings)
-
-    if args.command == "login":
-        _join_configured_class(client, settings)
-        print(f"Student    : {settings.student_id}")
-        print(f"Workspace  : {settings.workspace_dir}")
-        return
 
     if args.command == "join":
         _join_class(client, settings, args.class_code)
@@ -183,17 +301,22 @@ def main() -> None:
             print(f"Saved      : {path}")
         return
 
-    if args.command in {"once", "submit"} and not settings.assignment_filter:
-        assignment_id = args.assignment_id.strip() if args.command == "submit" else ""
-        if not assignment_id:
-            assignment_id = input("Assignment ID: ").strip()
-        if not assignment_id:
-            raise SystemExit("assignment_id is required")
-        object.__setattr__(settings, "assignment_filter", assignment_id)
+    if args.command == "peer-review":
+        result = client.submit_peer_review(
+            reviewer_student_id=settings.student_id,
+            submission_id=args.submission_id,
+            score=args.score,
+            comment=args.comment,
+        )
+        print(f"Assignment : {result.assignment_id}")
+        print(f"Submission : {result.submission_id}")
+        print(f"Reviewer   : {result.reviewer_student_id}")
+        print(f"Score      : {result.score}")
+        return
 
     if args.command in {"once", "submit"}:
         _join_configured_class(client, settings)
-        _run_sync(settings, client)
+        _run_sync(settings, client, allow_zip=getattr(args, "allow_zip", False))
     elif args.command == "watch":
         _join_configured_class(client, settings)
         watcher = AssignmentWatcher(
@@ -205,6 +328,7 @@ def main() -> None:
             debounce_seconds=settings.debounce_seconds,
             poll_interval_seconds=settings.poll_interval_seconds,
             assignment_filter=settings.assignment_filter,
+            allow_zip=False,
         )
         watcher.run_forever()
 
