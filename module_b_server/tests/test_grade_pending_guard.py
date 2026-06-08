@@ -5,14 +5,12 @@ import tempfile
 import time
 import unittest
 
-from fastapi import HTTPException
-
 from app import main
 from app.main import GradePayload, GradeRequest, get_conn, grade_submission, init_db
 
 
-class GradePendingGuardTests(unittest.TestCase):
-    def test_grade_rejects_non_pending_submission(self) -> None:
+class GradeUpdateTests(unittest.TestCase):
+    def test_grade_allows_updating_previously_graded_submission(self) -> None:
         original_db_path = main.DB_PATH
         original_feedback_dir = main.FEEDBACK_DIR
         with tempfile.TemporaryDirectory() as tmp:
@@ -36,7 +34,7 @@ class GradePendingGuardTests(unittest.TestCase):
                     (
                         assignment_id,
                         "Grade Guard",
-                        "Ensure repeat grading is rejected.",
+                        "Ensure repeat grading can update score.",
                         "2026-06-01 23:59:59",
                         "T001",
                         "2026-05-28 10:00:00",
@@ -72,18 +70,30 @@ class GradePendingGuardTests(unittest.TestCase):
                         submission_id=submission_id,
                         teacher_id="T001",
                         score=90,
-                        comment="Repeat grade.",
+                        comment="Updated grade.",
                         status="graded",
                     ),
                 )
 
-                with self.assertRaises(HTTPException) as caught:
-                    grade_submission(request)
-                self.assertEqual(caught.exception.status_code, 400)
-                self.assertEqual(
-                    caught.exception.detail["message"],
-                    "submission is not pending",
-                )
+                response = grade_submission(request)
+                self.assertEqual(response["payload"]["score"], 90)
+                self.assertEqual(response["payload"]["comment"], "Updated grade.")
+
+                conn = get_conn()
+                row = conn.execute(
+                    """
+                    SELECT status, score, comment, feedback_path
+                    FROM submissions
+                    WHERE submission_id = ?;
+                    """,
+                    (submission_id,),
+                ).fetchone()
+                conn.close()
+
+                self.assertEqual(row["status"], "graded")
+                self.assertEqual(row["score"], 90)
+                self.assertEqual(row["comment"], "Updated grade.")
+                self.assertTrue(Path(row["feedback_path"]).exists())
             finally:
                 main.DB_PATH = original_db_path
                 main.FEEDBACK_DIR = original_feedback_dir

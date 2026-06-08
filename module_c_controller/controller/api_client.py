@@ -24,6 +24,8 @@ class GradeResult:
     score: int
     status: str
     feedback_path: str
+    comment: str = ""
+    graded_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,7 @@ class ModuleBRepository:
         try:
             body = response.json()
         except ValueError as exc:
-            raise ModuleCApiError(f"invalid json response: {response.text}") from exc
+            raise ModuleCApiError(self._invalid_json_message(response)) from exc
         if response.status_code >= 400:
             raise ModuleCApiError(response.text)
         return body
@@ -102,25 +104,25 @@ class ModuleBRepository:
             self.auth_token = token
         return payload
 
-    def list_submissions(self, status: str | None = None) -> list[Submission]:
-        if status == "pending":
-            return self._list_pending()
-        if status == "approved":
-            return [
-                submission
-                for submission in self._reviewed_cache.values()
-                if submission.status == "approved"
-            ]
-        if status == "rejected":
-            return [
-                submission
-                for submission in self._reviewed_cache.values()
-                if submission.status == "rejected"
-            ]
+    def list_submissions(
+        self,
+        status: str | None = None,
+        assignment_id: str | None = None,
+    ) -> list[Submission]:
+        service_status = None if status is None else local_to_service_status(status)
+        if service_status == "approved":
+            service_status = "graded"
+        if service_status not in {None, "pending", "graded", "rejected"}:
+            service_status = "all"
+        return self._list_submissions(service_status or "all", assignment_id=assignment_id)
 
-        pending = self._list_pending()
-        reviewed = sorted(self._reviewed_cache.values(), key=lambda item: (item.created_at, item.id))
-        return [*pending, *reviewed]
+    def list_assignment_submissions(self, assignment_id: str) -> dict[str, Any]:
+        response = self._request(
+            "GET",
+            "/v1/submissions",
+            params={"status": "all", "assignment_id": assignment_id},
+        )
+        return self._payload(response)
 
     def get_submission(self, submission_id: int) -> Submission | None:
         if submission_id in self._pending_cache:
@@ -128,7 +130,7 @@ class ModuleBRepository:
         if submission_id in self._reviewed_cache:
             return self._reviewed_cache[submission_id]
 
-        for submission in self._list_pending():
+        for submission in self._list_submissions("all"):
             if submission.id == submission_id:
                 return submission
         return None
@@ -163,7 +165,7 @@ class ModuleBRepository:
             },
         )
         result = GradeResult(**self._payload(response))
-        cached = self._pending_cache.pop(submission_id, None)
+        cached = self._pending_cache.pop(submission_id, None) or self._reviewed_cache.get(submission_id)
         submission = self._grade_result_to_submission(result, cached, comment)
         self._reviewed_cache[submission.id] = submission
         return submission
@@ -206,6 +208,10 @@ class ModuleBRepository:
         description: str = "",
         deadline: str = "",
         class_id: str = "",
+        assignment_weight: float = 1.0,
+        peer_review_enabled: bool = False,
+        teacher_weight: float = 0.7,
+        peer_weight: float = 0.3,
     ) -> dict[str, Any]:
         response = self._request(
             "POST",
@@ -220,8 +226,37 @@ class ModuleBRepository:
                     "description": description,
                     "deadline": deadline,
                     "class_id": class_id or None,
+                    "assignment_weight": assignment_weight,
+                    "peer_review_enabled": peer_review_enabled,
+                    "teacher_weight": teacher_weight,
+                    "peer_weight": peer_weight,
                 },
             },
+        )
+        return self._payload(response)
+
+    def set_peer_review_stage(
+        self,
+        assignment_id: str,
+        stage: str = "peer_review",
+    ) -> dict[str, Any]:
+        response = self._request(
+            "POST",
+            f"/v1/assignments/{quote(assignment_id)}/peer-review/stage",
+            json={
+                "action": "SET_PEER_REVIEW_STAGE",
+                "timestamp": int(time.time()),
+                "payload": {
+                    "stage": stage,
+                },
+            },
+        )
+        return self._payload(response)
+
+    def auto_assign_peer_review_tasks(self, assignment_id: str) -> dict[str, Any]:
+        response = self._request(
+            "POST",
+            f"/v1/assignments/{quote(assignment_id)}/peer-review/tasks/auto",
         )
         return self._payload(response)
 
@@ -230,8 +265,45 @@ class ModuleBRepository:
         payload = self._payload(response)
         return list(payload.get("reports", []))
 
+    def check_plagiarism(
+        self,
+        assignment_id: str,
+        *,
+        method: str = "hybrid",
+        threshold: float = 0.75,
+        ai_prefilter: float | None = None,
+        ai_limit: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "assignment_id": assignment_id,
+            "method": method,
+            "threshold": threshold,
+        }
+        if ai_prefilter is not None:
+            payload["ai_prefilter"] = ai_prefilter
+        if ai_limit is not None:
+            payload["ai_limit"] = ai_limit
+        response = self._request(
+            "POST",
+            "/v1/plagiarism/check",
+            json={
+                "action": "CHECK_PLAGIARISM",
+                "timestamp": int(time.time()),
+                "payload": payload,
+            },
+        )
+        return self._payload(response)
+
     def get_score_stats(self, assignment_id: str) -> dict[str, Any]:
         response = self._request("GET", f"/v1/assignments/{quote(assignment_id)}/score-stats")
+        return self._payload(response)
+
+    def get_submission_plagiarism(self, submission_id: int) -> dict[str, Any]:
+        response = self._request("GET", f"/v1/submissions/{submission_id}/plagiarism")
+        return self._payload(response)
+
+    def get_ai_grade_report(self, submission_id: int) -> dict[str, Any]:
+        response = self._request("GET", f"/v1/submissions/{submission_id}/ai-grade-report")
         return self._payload(response)
 
     def get_student_history(self, student_id: str) -> dict[str, Any]:
@@ -298,13 +370,38 @@ class ModuleBRepository:
         )
 
     def _list_pending(self) -> list[Submission]:
-        response = self._request("GET", "/v1/submissions/pending")
+        return self._list_submissions("pending")
+
+    def _list_submissions(
+        self,
+        status: str = "pending",
+        assignment_id: str | None = None,
+    ) -> list[Submission]:
+        params: dict[str, str] = {"status": status}
+        if assignment_id:
+            params["assignment_id"] = assignment_id
+        response = self._request("GET", "/v1/submissions", params=params)
         payload = self._payload(response)
         submissions = [
-            self._pending_item_to_submission(item)
+            self._submission_item_to_submission(item)
             for item in payload.get("submissions", [])
         ]
-        self._pending_cache = {submission.id: submission for submission in submissions}
+        if status == "pending":
+            self._pending_cache = {submission.id: submission for submission in submissions}
+        elif status == "all":
+            self._pending_cache = {
+                submission.id: submission
+                for submission in submissions
+                if submission.status == "pending"
+            }
+            self._reviewed_cache = {
+                submission.id: submission
+                for submission in submissions
+                if submission.status != "pending"
+            }
+        else:
+            for submission in submissions:
+                self._reviewed_cache[submission.id] = submission
         return submissions
 
     def _request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
@@ -339,7 +436,7 @@ class ModuleBRepository:
         try:
             body = response.json()
         except ValueError as exc:
-            raise ModuleCApiError(f"invalid json response: {response.text}") from exc
+            raise ModuleCApiError(self._invalid_json_message(response)) from exc
 
         if response.status_code >= 400:
             detail = body.get("detail", body)
@@ -352,23 +449,58 @@ class ModuleBRepository:
         payload = body.get("payload")
         return payload if isinstance(payload, dict) else {}
 
-    def _pending_item_to_submission(self, item: dict[str, Any]) -> Submission:
+    def _invalid_json_message(self, response: requests.Response) -> str:
+        body = response.text.strip()
+        preview = body[:200] if body else "<empty response body>"
+        return (
+            "invalid json response from Module B; "
+            f"url={response.url} status={response.status_code} body={preview}. "
+            "Check CONTROLLER_API_BASE_URL or run setup with --api-base-url."
+        )
+
+    def _submission_item_to_submission(self, item: dict[str, Any]) -> Submission:
         submission_id = int(item["submission_id"])
         student_id = str(item["student_id"])
         assignment_id = str(item["assignment_id"])
+        assignment_title = str(item.get("assignment_title") or assignment_id)
+        class_id = str(item.get("class_id") or "")
+        class_name = str(item.get("class_name") or "")
+        download_url = str(item.get("download_url") or "")
         content = (
+            f"Assignment ID: {assignment_id}\n"
+            f"Assignment Title: {assignment_title}\n"
+            f"Class: {class_name or class_id or 'global'}\n"
+            f"Weight: {item.get('assignment_weight', '')}\n"
             f"File Name: {item.get('file_name', '')}\n"
-            f"Archive Path: {item.get('file_path', '')}\n"
-            f"MD5: {item.get('md5', '')}"
+            f"Download: {download_url}\n"
+            f"MD5: {item.get('md5', '')}\n"
+            f"Submitted At: {item.get('submit_time', '')}\n"
+            f"Teacher Score: {item.get('score')}\n"
+            f"Peer Avg Score: {item.get('peer_avg_score')}\n"
+            f"Peer Bonus: {item.get('peer_bonus')}\n"
+            f"Final Score: {item.get('final_score')}"
         )
         return Submission(
             id=submission_id,
             student_id=student_id,
             student_name=student_id,
-            assignment_title=assignment_id,
+            assignment_title=assignment_title,
             content=content,
             status=service_to_local_status(str(item.get("status", "pending"))),
             created_at=str(item.get("submit_time", "")),
+            assignment_id=assignment_id,
+            class_id=class_id or None,
+            class_name=class_name or None,
+            file_name=str(item.get("file_name") or "") or None,
+            download_url=download_url or None,
+            score=item.get("score"),
+            comment=str(item.get("comment") or "") or None,
+            feedback_path=str(item.get("feedback_path") or "") or None,
+            peer_avg_score=item.get("peer_avg_score"),
+            peer_bonus=item.get("peer_bonus"),
+            final_score=item.get("final_score"),
+            assignment_weight=item.get("assignment_weight"),
+            weighted_score=item.get("weighted_score"),
         )
 
     def _grade_result_to_submission(
@@ -385,8 +517,18 @@ class ModuleBRepository:
             content=cached.content if cached else f"Feedback Path: {result.feedback_path}",
             status=service_to_local_status(result.status),
             created_at=cached.created_at if cached else "",
+            assignment_id=cached.assignment_id if cached else result.assignment_id,
+            class_id=cached.class_id if cached else None,
+            class_name=cached.class_name if cached else None,
+            file_name=cached.file_name if cached else None,
+            download_url=cached.download_url if cached else None,
             score=result.score,
-            comment=comment,
-            reviewed_at="",
+            comment=result.comment or comment,
+            reviewed_at=result.graded_at,
             feedback_path=result.feedback_path,
+            peer_avg_score=cached.peer_avg_score if cached else None,
+            peer_bonus=cached.peer_bonus if cached else None,
+            final_score=cached.final_score if cached else None,
+            assignment_weight=cached.assignment_weight if cached else None,
+            weighted_score=cached.weighted_score if cached else None,
         )

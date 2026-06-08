@@ -54,6 +54,7 @@ class ApiClientTests(unittest.TestCase):
                                     "created_by": "T001",
                                     "created_at": "2026-05-27 10:00:00",
                                     "status": "open",
+                                    "assignment_weight": 2.5,
                                 }
                             ]
                         },
@@ -66,6 +67,7 @@ class ApiClientTests(unittest.TestCase):
         assignments = client.list_open_assignments()
 
         self.assertEqual(assignments[0].assignment_id, "home_001")
+        self.assertEqual(assignments[0].assignment_weight, 2.5)
         self.assertEqual(session.calls[0]["url"], "http://server/v1/assignments/open")
 
     def test_submit_assignment_sends_metadata_and_file(self) -> None:
@@ -256,6 +258,84 @@ class ApiClientTests(unittest.TestCase):
 
         self.assertEqual(classes[0].join_code, "JOIN101")
         self.assertEqual(session.calls[0]["url"], "http://server/v1/classes/my")
+
+    def test_submit_peer_review_sends_expected_payload(self) -> None:
+        session = FakeSession(
+            [
+                FakeResponse(
+                    200,
+                    {
+                        "code": 200,
+                        "message": "peer review submitted",
+                        "payload": {
+                            "assignment_id": "home_final",
+                            "submission_id": 21,
+                            "reviewer_student_id": "2024002",
+                            "score": 94,
+                        },
+                    },
+                )
+            ]
+        )
+        client = ModuleBClient("http://server", auth_token="token-123", session=session)  # type: ignore[arg-type]
+
+        result = client.submit_peer_review(
+            reviewer_student_id="2024002",
+            submission_id=21,
+            score=94,
+            comment="Clear presentation.",
+        )
+
+        self.assertEqual(result.assignment_id, "home_final")
+        call = session.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(call["url"], "http://server/v1/peer-reviews")
+        headers = call["kwargs"]["headers"]  # type: ignore[index]
+        self.assertEqual(headers["Authorization"], "Bearer token-123")
+        request_body = call["kwargs"]["json"]  # type: ignore[index]
+        self.assertEqual(request_body["action"], "SUBMIT_PEER_REVIEW")
+        payload = request_body["payload"]
+        self.assertEqual(payload["reviewer_student_id"], "2024002")
+        self.assertEqual(payload["submission_id"], 21)
+        self.assertEqual(payload["score"], 94)
+        self.assertEqual(payload["comment"], "Clear presentation.")
+
+    def test_list_peer_review_tasks_maps_payload(self) -> None:
+        session = FakeSession(
+            [
+                FakeResponse(
+                    200,
+                    {
+                        "code": 200,
+                        "message": "peer review tasks returned",
+                        "payload": {
+                            "tasks": [
+                                {
+                                    "assignment_id": "home_final",
+                                    "reviewer_student_id": "2024002",
+                                    "submission_id": 21,
+                                    "target_student_id": "2024001",
+                                    "assignment_title": "Final Project",
+                                }
+                            ]
+                        },
+                    },
+                )
+            ]
+        )
+        client = ModuleBClient("http://server", auth_token="token-123", session=session)  # type: ignore[arg-type]
+
+        tasks = client.list_peer_review_tasks("2024002", assignment_id="home_final")
+
+        self.assertEqual(tasks[0].submission_id, 21)
+        self.assertEqual(tasks[0].assignment_title, "Final Project")
+        self.assertEqual(tasks[0].target_student_id, "2024001")
+        call = session.calls[0]
+        self.assertEqual(call["method"], "GET")
+        self.assertEqual(call["url"], "http://server/v1/peer-review/tasks/my")
+        self.assertEqual(call["kwargs"]["params"], {"student_id": "2024002", "assignment_id": "home_final"})
+        headers = call["kwargs"]["headers"]  # type: ignore[index]
+        self.assertEqual(headers["Authorization"], "Bearer token-123")
 
 
 if __name__ == "__main__":

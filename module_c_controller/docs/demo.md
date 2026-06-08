@@ -14,9 +14,11 @@ python scripts/run_controller.py
 
 启动后默认进入 pending 视图。使用 `j` / `k` 在待批改提交之间移动，确认右侧详情会随选中记录变化。
 
-## 3. Enter 批改
+## 3. Enter 批改或重新评分
 
 在 pending 视图选中一条提交后按 `Enter`，打开批改窗口。输入分数和评语。
+
+HTTP 模式下，在 approved 或 all 视图中选中已批改提交后也可以按 `Enter` 重新评分。
 
 ## 4. Ctrl+s 提交
 
@@ -27,6 +29,8 @@ python scripts/run_controller.py
 ## 5. approved 视图查看批改结果
 
 按 `a` 切换到 approved 视图。选中刚刚批改的记录，确认右侧展示分数、评语、批改时间和反馈文件路径。
+
+HTTP 模式下，按 `d` 可下载当前选中的提交包到 `~/.haocean-teacher/downloads/`。
 
 ## 6. all 视图查看全部记录
 

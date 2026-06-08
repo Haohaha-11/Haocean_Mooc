@@ -118,6 +118,11 @@ GET /v1/classes/my
 GET /v1/classes
 ```
 
+约束：
+
+- `class_id` 和 `join_code` 全局唯一。
+- `class_name` 在同一老师名下不可重复；不同老师可以使用相同班级名。
+
 ## 4. 创建作业
 
 ```http
@@ -137,7 +142,12 @@ Content-Type: application/json
     "title": "Homework 1",
     "description": "Finish the required exercise.",
     "deadline": "2026-06-01 23:59:59",
-    "class_id": "cs101"
+    "class_id": "cs101",
+    "assignment_weight": 1.0,
+    "peer_review_enabled": true,
+    "teacher_weight": 0.7,
+    "peer_weight": 0.3,
+    "bonus_threshold_1": 5
   }
 }
 ```
@@ -152,6 +162,12 @@ Content-Type: application/json
     "assignment_id": "home_001",
     "title": "Homework 1",
     "class_id": "cs101",
+    "assignment_weight": 1.0,
+    "peer_review_enabled": true,
+    "peer_review_stage": "submission",
+    "teacher_weight": 0.7,
+    "peer_weight": 0.3,
+    "peer_bonus_rule": "+1 when peer score is within 5 points of teacher score",
     "status": "open"
   }
 }
@@ -163,6 +179,10 @@ Content-Type: application/json
 - `assignment_id` 不允许重复
 - `teacher_id` 写入服务端 `created_by`
 - `class_id` 可为空；不为空时必须是该教师创建的班级
+- 教师端会按北京时间把简写 deadline 规范化为 `YYYY-MM-DD HH:MM:SS`
+- `assignment_weight` 是课程总评中的相对权重；默认 `1.0`，必须为非负数
+- `peer_review_enabled` 建议在创建作业时决定；开启后初始阶段为 `submission`
+- `teacher_weight` 和 `peer_weight` 不能为负数，且二者之和必须大于 0
 
 ## 5. 查询开放作业
 
@@ -253,19 +273,36 @@ Content-Type: multipart/form-data
 - MD5 不一致时返回 400，并删除临时文件
 - 上传文件名会通过 `Path(name).name` 清理路径部分
 
-## 7. 查询待批改提交
+## 7. 查询提交列表
 
 ```http
-GET /v1/submissions/pending
+GET /v1/submissions?status=pending
 ```
+
+`status` 支持：
+
+- `pending`：待批改
+- `graded` / `approved`：已评分
+- `rejected`：已打回
+- `all`：全部提交
+
+也可以追加 `assignment_id=home_001` 只看某一次作业的提交。旧路径 `GET /v1/submissions/pending` 仍保留，等价于 `status=pending`。
 
 成功响应：
 
 ```json
 {
   "code": 200,
-  "message": "pending submissions returned",
+  "message": "submissions returned",
   "payload": {
+    "status": "pending",
+    "assignment_id": null,
+    "summary": {
+      "total": 1,
+      "pending": 1,
+      "graded": 0,
+      "rejected": 0
+    },
     "submissions": [
       {
         "submission_id": 1,
@@ -275,10 +312,12 @@ GET /v1/submissions/pending
         "class_id": "cs101",
         "class_name": "CS101 Spring",
         "file_name": "2024001_home_001.tar.gz",
-        "file_path": "/Hao/gongchuang/module_b_server/data/submissions/2024001/home_001/1760000100_2024001_home_001.tar.gz",
         "md5": "abc123...",
         "submit_time": "2026-05-28 10:10:00",
         "status": "pending",
+        "score": null,
+        "comment": null,
+        "feedback_path": null,
         "download_url": "/v1/submissions/1/download"
       }
     ]
@@ -286,7 +325,7 @@ GET /v1/submissions/pending
 }
 ```
 
-模块 C 正式 HTTP 模式使用该接口渲染 pending 列表。`file_path` 是服务端本地路径，只能用于审计展示；教师客户端下载提交包必须使用 `download_url`。
+模块 C 正式 HTTP 模式使用该接口渲染 pending / graded / all 列表。教师客户端下载提交包必须使用 `download_url` 或下载接口。
 
 ## 7.1 下载提交包
 
@@ -330,8 +369,10 @@ Content-Type: application/json
     "student_id": "2024001",
     "assignment_id": "home_001",
     "score": 95,
+    "comment": "完成较好，结构清晰。",
     "status": "graded",
-    "feedback_path": "/Hao/gongchuang/module_b_server/data/feedback/2024001/home_001/submission_1_feedback.md"
+    "feedback_path": "/Hao/gongchuang/module_b_server/data/feedback/2024001/home_001/submission_1_feedback.md",
+    "graded_at": "2026-05-28 10:20:00"
   }
 }
 ```
@@ -341,9 +382,10 @@ Content-Type: application/json
 - `action` 必须为 `GRADE`
 - `score` 必须是 0 到 100 的整数
 - `status` 只能为 `graded` 或 `rejected`
-- `submission_id` 必须存在且当前状态必须为 `pending`
-- 非 `pending` 提交不能重复批改，返回 400
-- 模块 B 负责生成 Markdown 反馈文件
+- `submission_id` 必须存在，且当前状态为 `pending`、`graded` 或 `rejected`
+- 已评分提交允许重新评分，模块 B 会覆盖 `score`、`comment`、`status` 和反馈 Markdown
+- 启用认证时，教师只能评分自己创建作业或自己班级下的提交
+- 模块 B 负责生成或覆盖 Markdown 反馈文件
 
 ## 9. 查询学生反馈
 
@@ -401,7 +443,7 @@ POST /v1/assignments/peer-review/config
 Content-Type: application/json
 ```
 
-用于给某个作业开启或关闭互评。普通作业可以不开启，期末大作业可以开启。
+主流程建议在创建作业时通过 `peer_review_enabled` 决定是否开启互评。本接口保留为兼容入口，也可用于补配或调整已有作业的互评权重；调用后阶段会回到 `setup`。
 
 请求：
 
@@ -415,11 +457,11 @@ Content-Type: application/json
     "teacher_weight": 0.7,
     "peer_weight": 0.3,
     "bonus_threshold_1": 5,
-    "bonus_value_1": 5,
+    "bonus_value_1": 1,
     "bonus_threshold_2": 10,
-    "bonus_value_2": 3,
+    "bonus_value_2": 0,
     "bonus_threshold_3": 15,
-    "bonus_value_3": 1
+    "bonus_value_3": 0
   }
 }
 ```
@@ -433,8 +475,10 @@ Content-Type: application/json
   "payload": {
     "assignment_id": "home_final",
     "peer_review_enabled": true,
+    "peer_review_stage": "setup",
     "teacher_weight": 0.7,
-    "peer_weight": 0.3
+    "peer_weight": 0.3,
+    "peer_bonus_rule": "+1 when peer score is within 5 points of teacher score"
   }
 }
 ```
@@ -448,11 +492,11 @@ Content-Type: application/json
 | `teacher_weight` | 老师评分占比 |
 | `peer_weight` | 学生互评平均分占比 |
 | `bonus_threshold_1` | 一档奖励阈值 |
-| `bonus_value_1` | 一档奖励分 |
+| `bonus_value_1` | 兼容字段；当前奖励固定为命中一档时最多 `+1` |
 | `bonus_threshold_2` | 二档奖励阈值 |
-| `bonus_value_2` | 二档奖励分 |
+| `bonus_value_2` | 兼容字段；当前为 `0` |
 | `bonus_threshold_3` | 三档奖励阈值 |
-| `bonus_value_3` | 三档奖励分 |
+| `bonus_value_3` | 兼容字段；当前为 `0` |
 
 约束：
 
@@ -462,6 +506,13 @@ Content-Type: application/json
 - `teacher_weight + peer_weight` 必须大于 0
 
 ## 12. 学生提交互评分
+
+自动分配互评任务规则：
+
+- 默认每个学生互评 2 份作业。
+- 如果只有 2 个学生，则相互评 1 份。
+- 只有 1 个学生无法分配互评任务。
+- 自动分配按学生去重，使用每个学生该作业下最新一次提交作为互评对象。
 
 ```http
 POST /v1/peer-reviews
@@ -505,6 +556,8 @@ Content-Type: application/json
 - `action` 必须为 `SUBMIT_PEER_REVIEW`
 - `submission_id` 必须存在
 - 作业必须已经开启互评
+- 作业阶段必须是 `peer_review` 或 `final_calculation`
+- 学生必须拥有该提交对应的互评任务
 - 学生不能给自己的提交评分
 - `score` 必须在 0 到 100 之间
 - 同一个学生对同一个提交重复评分时，会覆盖旧评分
@@ -537,10 +590,10 @@ curl -X POST http://127.0.0.1:8000/v1/assignments/home_final/calculate-final-sco
 
 | 互评分与老师评分差距 | 奖励 |
 | --- | --- |
-| ≤ 5 分 | +5 |
-| ≤ 10 分 | +3 |
-| ≤ 15 分 | +1 |
-| > 15 分 | +0 |
+| ≤ 5 分 | +1 |
+| > 5 分 | +0 |
+
+同一学生在同一作业内即使有多个互评任务命中接近条件，互评准确奖励也最多为 `+1`。
 
 成功响应：
 
@@ -557,8 +610,10 @@ curl -X POST http://127.0.0.1:8000/v1/assignments/home_final/calculate-final-sco
         "assignment_id": "home_final",
         "teacher_score": 95,
         "peer_avg_score": 94.0,
-        "peer_bonus": 3.0,
-        "final_score": 97.7,
+        "peer_bonus": 1.0,
+        "final_score": 95.7,
+        "assignment_weight": 1.0,
+        "weighted_score": 95.7,
         "status": "graded"
       }
     ]
@@ -570,8 +625,9 @@ curl -X POST http://127.0.0.1:8000/v1/assignments/home_final/calculate-final-sco
 
 - `teacher_score` 来自老师批改接口中的 `score`
 - `peer_avg_score` 是其他学生对该提交的互评分平均值
-- `peer_bonus` 是该学生给别人评分时，因为接近老师评分而获得的奖励
+- `peer_bonus` 是该学生给别人评分时，因为接近老师评分而获得的奖励；每个作业最多 `+1`
 - `final_score` 为最终成绩
+- `assignment_weight` / `weighted_score` 用于课程总评和归档中的加权成绩
 
 ## 14. 查询最终成绩
 
@@ -602,8 +658,10 @@ curl http://127.0.0.1:8000/v1/assignments/home_final/final-scores
         "assignment_id": "home_final",
         "teacher_score": 95,
         "peer_avg_score": 94.0,
-        "peer_bonus": 3.0,
-        "final_score": 97.7,
+        "peer_bonus": 1.0,
+        "final_score": 95.7,
+        "assignment_weight": 1.0,
+        "weighted_score": 95.7,
         "status": "graded"
       }
     ]
@@ -638,13 +696,21 @@ GET /v1/assignments/{assignment_id}/plagiarism
 GET /v1/submissions/{submission_id}/plagiarism
 ```
 
+查询单个提交的 AI 批改报告：
+
+```http
+GET /v1/submissions/{submission_id}/ai-grade-report
+```
+
+服务端读取 `DEEPSEEK_API_KEY` 或 `MODULE_B_DEEPSEEK_API_KEY`。未配置时返回本地结构化报告；配置后会调用 DeepSeek 并缓存结果。重新批改提交会清除该提交的缓存报告。
+
 查询某个作业的成绩统计：
 
 ```http
 GET /v1/assignments/{assignment_id}/score-stats
 ```
 
-返回 `summary` 和 `scores`。统计使用 `final_score` 优先，没有最终成绩时使用教师批改分 `score`。
+返回 `summary` 和 `scores`。统计使用 `final_score` 优先，没有最终成绩时使用教师批改分 `score`。`scores` 中包含 `teacher_score`、`peer_avg_score`、`peer_bonus`、`final_score`、`assignment_weight` 和 `weighted_score`。
 
 查询某个学生的历史成绩：
 
@@ -672,10 +738,10 @@ Content-Type: application/json
   "payload": {
     "archive_name": "course_archive.zip",
     "note": "课程结束归档",
-    "include_db": true,
+    "include_db": false,
     "include_submissions": true,
-    "include_feedback": true,
-    "include_docs": true
+    "include_feedback": false,
+    "include_docs": false
   }
 }
 ```
@@ -694,15 +760,23 @@ Content-Type: application/json
 }
 ```
 
-归档内容：
+归档内容（教师作业文件集合包）：
 
 | 目录或文件 | 说明 |
 | --- | --- |
-| `database/engine.db` | SQLite 数据库备份 |
-| `submissions/` | 学生提交文件 |
-| `feedback/` | 教师反馈 Markdown |
-| `docs/` | 项目文档 |
-| `README.md` | 模块 B 使用说明 |
+| `assignment_<assignment_id>_homework_files/` | 单作业时的导出目录（扁平结构） |
+| `assignment_all_homework_files/` | 多作业混合导出时的目录（扁平结构） |
+| `scores/assignment_scores.csv` | 每次提交的教师分、互评分、奖励、最终分、作业权重和加权分 |
+| `scores/course_final_scores.csv` | 按学生汇总的课程加权总评；权重按相对权重归一计算 |
+
+导出规则：
+
+- 只导出学生提交包中的作业文件，不打包数据库、反馈目录、文档目录、运行缓存目录。
+- 每个文件导出后统一重命名为：`{assignment_id}_{student_id}_{submission_id}_{original_filename}`。
+- 若重名冲突，会自动追加序号后缀（例如 `_2`）。
+- 文件名会做安全化处理，仅保留跨平台安全字符。
+- 排除：`__pycache__/`、`.git/`、`.venv/`、`node_modules/`、`.DS_Store`、`Thumbs.db`、`*.pyc`、`*.log`、`*.tmp`、`*.db`、`*.sqlite`、`*.zip`、`*.tar`、`*.gz`。
+- 保留常见作业文件：`.py`、`.c`、`.cpp`、`.h`、`.java`、`.js`、`.html`、`.css`、`.md`、`.txt`、`.pdf`、`.docx`、`.xlsx`、`.ipynb`、`.png`、`.jpg`、`.jpeg`。
 
 约束：
 
@@ -768,4 +842,165 @@ unzip -l course_archive.zip
     "message": "archive does not exist"
   }
 }
+```
+---
+
+## 18. C → B：触发作业查重
+
+### POST `/v1/plagiarism/check`
+
+用于对某个作业进行查重。候选范围包括当前作业内同期提交之间的比较，以及当前作业提交与最近三年历史提交的交叉比较；同一学生自己的多次提交不会互相判为疑似。
+
+当前支持 `token`、`hybrid`、`ai` 三种方式。
+
+- `token`：只做本地 token 查重，不调用外部模型。
+- `hybrid`：先做本地 token 预筛，再把高风险候选对交给 DeepSeek 复核，推荐日常使用。
+- `ai`：仍先按本地分数排序和限流，再调用 DeepSeek；如需全量 AI 两两复核，可设置 `ai_prefilter=0` 并调大 `ai_limit`。
+
+本地预筛会先对文本进行规范化处理，过滤数字、下划线和标点，只保留中文和英文 token，再计算相似度，避免因为数字或下划线相同导致误判。`hybrid` / `ai` 会把预筛后的候选对及其 `scope`、作业编号、提交编号发给 DeepSeek 复核。
+
+### 请求示例
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/plagiarism/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "CHECK_PLAGIARISM",
+    "timestamp": 1710000000,
+    "payload": {
+      "assignment_id": "home_1",
+      "threshold": 0.75,
+      "method": "hybrid",
+      "ai_prefilter": 0.45,
+      "ai_limit": 12
+    }
+  }'
+```
+
+### 请求字段说明
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| action | string | 必须为 `CHECK_PLAGIARISM` |
+| assignment_id | string | 作业编号 |
+| threshold | float | 查重阈值，范围 `(0, 1]`，如 `0.75` |
+| method | string | 支持 `token`、`hybrid`、`ai` |
+| ai_prefilter | float | 可选，本地预筛阈值，默认读取 `DEEPSEEK_PREFILTER_SIMILARITY` |
+| ai_limit | int | 可选，最多交给 DeepSeek 复核的候选对数量，默认读取 `DEEPSEEK_MAX_CANDIDATE_PAIRS` |
+
+### 返回示例
+
+```json
+{
+  "code": 200,
+  "message": "plagiarism check finished",
+  "payload": {
+    "assignment_id": "home_1",
+    "method": "hybrid",
+    "threshold": 0.75,
+    "note": "digits and underscores are ignored during tokenization; current assignment submissions are compared with each other and with submissions from the last three years; AI methods first prefilter by local token similarity for efficiency",
+    "scope": "current_assignment_and_last_three_years",
+    "submission_count": 2,
+    "historical_submission_count": 8,
+    "compared_document_count": 10,
+    "candidate_pair_count": 9,
+    "ai_enabled": true,
+    "ai_model": "deepseek-v4-flash",
+    "ai_prefilter": 0.45,
+    "ai_limit": 12,
+    "ai_reviewed_count": 1,
+    "ai_error_count": 0,
+    "suspected_pair_count": 1,
+    "suspected_pairs": [
+      {
+        "student_a": "2024001",
+        "submission_a": 21,
+        "assignment_a": "home_1",
+        "file_a": "2024001_home_1.tar.gz",
+        "student_b": "2024002",
+        "submission_b": 22,
+        "assignment_b": "home_1",
+        "file_b": "2024002_home_1.tar.gz",
+        "scope": "current_assignment",
+        "similarity": 0.92,
+        "local_similarity": 0.83,
+        "ai_similarity": 0.92,
+        "ai_confidence": 0.88,
+        "threshold": 0.75,
+        "reason": "AI 判断两份提交存在相同核心循环结构。",
+        "evidence": ["核心函数结构一致", "错误处理方式相同"]
+      }
+    ]
+  }
+}
+```
+
+### 说明
+
+1. `token` 模式不调用 DeepSeek；
+2. `hybrid` / `ai` 模式需要配置 `DEEPSEEK_API_KEY`；
+3. `similarity >= threshold` 或 AI 明确判定疑似重复时，该提交对会被列入疑似重复；
+4. `scope=current_assignment` 表示同期作业内比较，`scope=last_three_years` 表示当前提交和三年内历史提交比较；
+5. 默认只把本地高风险候选交给 AI，避免全班所有提交两两调用模型；
+6. 默认模型为 `deepseek-v4-flash`，后端会关闭 V4 thinking 模式以提升批量查重速度。
+
+---
+
+## 19. C / A → B：查询查重报告
+
+### GET `/v1/plagiarism/reports/{assignment_id}`
+
+用于查看某个作业的查重报告历史。
+
+### 请求示例
+
+```bash
+curl http://127.0.0.1:8000/v1/plagiarism/reports/home_1
+```
+
+### 返回示例
+
+```json
+{
+  "code": 200,
+  "message": "plagiarism reports returned",
+  "payload": {
+    "assignment_id": "home_1",
+    "reports": [
+      {
+        "report_id": 1,
+        "assignment_id": "home_1",
+        "method": "token",
+        "threshold": 0.75,
+        "created_at": "2026-06-06 05:20:07",
+        "report_path": "/Hao/gongchuang/module_b_server/data/plagiarism_reports/plagiarism_home_1_xxx.json",
+        "report": {
+          "suspected_pair_count": 1,
+          "suspected_pairs": []
+        }
+      }
+    ]
+  }
+}
+```
+
+### 图形化界面对接说明
+
+江浩的图形化界面可以直接调用：
+
+```text
+POST /v1/plagiarism/check
+GET  /v1/plagiarism/reports/{assignment_id}
+```
+
+建议界面展示字段：
+
+```text
+student_a
+student_b
+submission_a
+submission_b
+similarity
+threshold
+reason
 ```

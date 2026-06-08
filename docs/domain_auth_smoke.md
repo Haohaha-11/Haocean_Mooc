@@ -42,6 +42,7 @@ cd /Hao/gongchuang/module_b_server
 
 MODULE_B_AUTH_REQUIRED=true \
 MODULE_B_DEV_VERIFICATION_LOG=false \
+MODULE_B_SYSTEM_NAME='Haocean Mooc' \
 SMTPServer=smtp.example.com \
 SMTPPort=587 \
 SMTPAccount=no-reply@example.com \

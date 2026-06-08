@@ -52,11 +52,12 @@ def _render_logo_panel() -> list[tuple[str, str]]:
 def _usage_lines(role_label: str) -> list[str]:
     if role_label == "Teacher":
         return [
-            "Welcome Teacher !",
-            "After login: manage classes and review.",
-            "Use classes create/list and assignment create.",
-            "Open TUI for grading, stats, archives.",
-            "Downloads save to ~/.haocean-teacher/.",
+            "Teacher quick commands:",
+            "class    create class",
+            "select   choose active class",
+            "publish  publish assignment",
+            "grade    review, download, plagiarism",
+            "Enter keeps defaults; q changes them.",
         ]
     return [
         "Welcome Student !",
@@ -78,7 +79,7 @@ def _render_info_panel(
         ("Mode  interactive CLI", TEXT_COLOR),
     ]
     lower = [
-        ("Haocean MOOC CLI", ACCENT_COLOR),
+        ("Haocean Mooc CLI", ACCENT_COLOR),
         *[(line, TEXT_COLOR) for line in _usage_lines(role_label)],
     ]
     blank_count = max(target_height - len(upper) - len(lower), 1)
@@ -148,18 +149,25 @@ def save_cached_token(token_file: Path, token: str) -> None:
     token_file.write_text(token.strip() + "\n", encoding="utf-8")
 
 
-def ensure_teacher_auth(repo: ModuleBRepository, settings: Settings) -> None:
+def ensure_teacher_auth(
+    repo: ModuleBRepository,
+    settings: Settings,
+    *,
+    show_startup: bool = True,
+    force_code: bool = False,
+) -> None:
     health = repo.health()
     if not health.get("auth_required"):
         return
 
     token = settings.auth_token or read_cached_token(settings.auth_token_file)
-    render_startup("Teacher", settings.api_base_url)
-    if token:
+    if token and not force_code:
         repo.auth_token = token
-        print("Status     : signed in with cached token")
+        print("Auth       : cached token")
         return
 
+    if show_startup:
+        render_startup("Teacher", settings.api_base_url)
     email = settings.email.strip() or input("Email      : ").strip()
     teacher_id = settings.teacher_id.strip() or input("Teacher ID : ").strip()
     if not email:

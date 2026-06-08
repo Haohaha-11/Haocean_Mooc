@@ -7,11 +7,12 @@
 - Textual TUI。
 - `pending` / `approved` / `all` 三种视图。
 - `j` / `k` 上下选择。
-- `Enter` 进入批改。
-- `Ctrl+s` 提交审批。
+- `Enter` 进入批改或重新评分。
+- `Ctrl+s` 保存评分。
 - `Esc` 取消。
-- 自动生成 Markdown 反馈。
-- 数据库状态从 `pending` 更新为 `approved`。
+- HTTP 模式由模块 B 生成/覆盖 Markdown 反馈。
+- 本地 SQLite Mock 模式仍会把数据库状态从 `pending` 更新为 `approved`。
+- HTTP 模式可以按 `d` 下载当前提交包。
 - 可以在 TUI 中查看已批改记录的 `score`、`comment`、`reviewed_at`、`feedback_path`。
 - `pytest` 已通过。
 
@@ -59,9 +60,10 @@ pytest -q
 | --- | --- |
 | `j` | 向下选择 |
 | `k` | 向上选择 |
-| `Enter` | 批改当前 `pending` 作业 |
+| `Enter` | 批改当前提交；已批改提交会打开重新评分 |
 | `Ctrl+s` | 在批改弹窗中提交 |
 | `Esc` | 取消批改 |
+| `d` | HTTP 模式下载当前提交包 |
 | `p` | `pending` 视图 |
 | `a` | `approved` 视图 |
 | `l` | `all` 视图 |
@@ -94,15 +96,15 @@ pytest -q
 
 | action | 说明 |
 | --- | --- |
-| `QUERY_PENDING` | 查询待批改作业 |
-| `QUERY_APPROVED` | 查询已批改作业 |
-| `QUERY_ALL` | 查询全部作业 |
-| `APPROVE` | 提交批改结果 |
+| `GET /v1/submissions?status=pending` | 查询待批改作业 |
+| `GET /v1/submissions?status=graded` | 查询已批改作业 |
+| `GET /v1/submissions?status=all` | 查询全部作业 |
+| `POST /v1/submissions/grade` | 保存评分或重新评分 |
+| `GET /v1/submissions/{submission_id}/download` | 下载提交包 |
 
 ## 模块 C 的输出
 
 模块 C 当前会产生以下输出：
 
-- 数据库状态更新，将作业从 `pending` 更新为 `approved`。
-- Markdown 反馈文件，输出到 `feedback_outbox/`。
-- `feedback_markdown` 或 `feedback_path` 需要交给模块 B，后续由模块 A 获取反馈。
+- SQLite Mock 模式：数据库状态更新，将作业从 `pending` 更新为 `approved`，Markdown 反馈文件输出到 `feedback_outbox/`。
+- HTTP 模式：模块 C 只提交评分；模块 B 保存正式状态和反馈文件，模块 A 后续从模块 B 获取反馈。

@@ -30,18 +30,24 @@ fi
 "$VENV_DIR/bin/python" -m pip install --upgrade \
   "git+$REPO_URL@$REF#subdirectory=module_a_client"
 
-LEGACY_BIN="$BIN_DIR/haocean"
-if [ -L "$LEGACY_BIN" ] && [ "$(readlink "$LEGACY_BIN")" = "$VENV_DIR/bin/haocean" ]; then
-  rm -f "$LEGACY_BIN"
+AI_BIN="$BIN_DIR/haocean"
+if [ -e "$AI_BIN" ] && [ ! -L "$AI_BIN" ]; then
+  echo "Skipped helper command because $AI_BIN already exists."
+elif [ -L "$AI_BIN" ] && [ "$(readlink "$AI_BIN")" != "$VENV_DIR/bin/haocean" ]; then
+  echo "Skipped helper command because $AI_BIN points to another target."
+else
+  ln -sf "$VENV_DIR/bin/haocean" "$AI_BIN"
 fi
 ln -sf "$VENV_DIR/bin/haocean-student" "$BIN_DIR/haocean-student"
 
 echo "Haocean student CLI installed."
 echo "Command: $BIN_DIR/haocean-student"
+echo "AI help: $BIN_DIR/haocean ai-help"
 echo
 echo "If 'haocean-student' is not found, add this to your shell profile:"
 echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
 echo
 echo "Next:"
-echo "  haocean-student setup --student-id 2024001 --email student@example.com --class-code JOIN101"
+echo "  haocean-student setup"
 echo "  haocean-student login"
+echo "  haocean ai-help"

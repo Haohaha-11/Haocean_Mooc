@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
+from pathlib import Path
 
+from .ai_help import add_ai_help_arguments, run_ai_help
 from .api_client import ModuleBClient
 from .archive import preview_assignment_archive
-from .auth import ensure_student_auth, read_cached_token, render_startup
-from .config import DEFAULT_SERVER_URL, Settings, load_settings, write_user_config
+from .auth import ensure_student_auth, render_startup
+from .config import (
+    DEFAULT_SERVER_URL,
+    Settings,
+    list_student_profiles,
+    load_settings,
+    set_active_profile,
+    write_student_profile,
+    write_user_config,
+)
 from .feedback import save_feedback_items
 from .logger import configure_logging
 from .watcher import AssignmentWatcher
@@ -18,11 +29,14 @@ def build_parser() -> argparse.ArgumentParser:
     setup = subparsers.add_parser("setup", help="Write ~/.haocean/config.json")
     setup.add_argument("--server-url", default="", help=f"Backend URL, default {DEFAULT_SERVER_URL}")
     setup.add_argument("--student-id", default="", help="Student display ID")
+    setup.add_argument("--name", default="", help="Student name")
     setup.add_argument("--email", default="", help="Login email")
     setup.add_argument("--class-code", default="", help="Class join code")
+    setup.add_argument("--profile", default="", help="Local profile name, default student ID")
     setup.add_argument("--workspace-dir", default="", help="Local workspace directory")
 
     subparsers.add_parser("login", help="Login with email verification code")
+    subparsers.add_parser("profiles", help="List local student profiles")
     subparsers.add_parser("list", help="List open assignments")
     subparsers.add_parser("classes", help="List joined classes")
     join = subparsers.add_parser("join", help="Join a class by teacher-provided code")
@@ -36,10 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
     preview = subparsers.add_parser("preview", help="Preview submission package without upload")
     preview.add_argument("assignment_id", nargs="?", default="", help="Assignment ID")
     preview.add_argument("--allow-zip", action="store_true", help="Allow nested archive files (*.zip, *.tar, *.gz, *.7z, *.rar)")
-    peer_review = subparsers.add_parser("peer-review", help="Submit a peer review score")
-    peer_review.add_argument("submission_id", type=int, help="Submission ID to review")
-    peer_review.add_argument("score", type=int, help="Peer review score, 0-100")
+    peer_review = subparsers.add_parser("peer-review", help="List or submit peer review tasks")
+    peer_review.add_argument("submission_id", type=int, nargs="?", help="Submission ID to review")
+    peer_review.add_argument("score", type=int, nargs="?", help="Peer review score, 0-100")
+    peer_review.add_argument("--assignment-id", default="", help="Filter peer review tasks by assignment")
     peer_review.add_argument("--comment", default="", help="Peer review comment")
+    ai_help = subparsers.add_parser("ai-help", help="Ask the Haocean AI usage assistant")
+    add_ai_help_arguments(ai_help)
     subparsers.add_parser("watch", help="Run background watcher")
     return parser
 
@@ -54,6 +71,13 @@ def _build_client(settings: Settings) -> ModuleBClient:
     )
 
 
+def _command_prefix() -> str:
+    command = Path(sys.argv[0]).name
+    if command in {"haocean", "haocean-student"}:
+        return "haocean-student"
+    return f"{sys.executable} {sys.argv[0]}"
+
+
 def _ensure_auth(client: ModuleBClient, settings: Settings) -> str:
     student_id = ensure_student_auth(client, settings)
     if student_id:
@@ -61,13 +85,7 @@ def _ensure_auth(client: ModuleBClient, settings: Settings) -> str:
     return settings.student_id
 
 
-def _has_cached_auth(settings: Settings) -> bool:
-    return bool(settings.auth_token.strip() or read_cached_token(settings.auth_token_file))
-
-
 def _render_login_startup_if_needed(settings: Settings) -> bool:
-    if _has_cached_auth(settings):
-        return False
     render_startup("Student", settings.server_url)
     return True
 
@@ -99,57 +117,167 @@ def _join_configured_class(client: ModuleBClient, settings: Settings) -> None:
 
 
 def _handle_setup(args: argparse.Namespace, settings: Settings) -> None:
-    student_id = args.student_id.strip() or settings.student_id or input("Student ID : ").strip()
-    email = args.email.strip() or settings.email or input("Email      : ").strip()
+    requested_profile = args.profile.strip()
+    student_id = args.student_id.strip()
+    if not student_id:
+        default_student_id = (
+            settings.student_id.strip()
+            if not requested_profile or requested_profile == settings.profile_name
+            else ""
+        )
+        if default_student_id:
+            raw_student_id = input(f"Student ID [{default_student_id}] : ").strip()
+            student_id = raw_student_id or default_student_id
+        else:
+            student_id = input("Student ID : ").strip()
+
+    active_student_id = settings.student_id.strip()
+    if requested_profile:
+        profile_name = requested_profile
+        updating_active_profile = requested_profile == settings.profile_name
+    elif student_id == active_student_id:
+        profile_name = settings.profile_name or student_id
+        updating_active_profile = True
+    else:
+        profile_name = student_id
+        updating_active_profile = False
+
+    default_name = settings.name if updating_active_profile else ""
+    default_email = settings.email if updating_active_profile else ""
+    default_class_code = settings.class_code if updating_active_profile else ""
+    name = args.name.strip() or default_name or input("Name       : ").strip()
+    email = args.email.strip() or default_email or input("Email      : ").strip()
+    class_code = args.class_code.strip() or default_class_code or input("Class Code (optional): ").strip()
+    if not student_id:
+        raise SystemExit("student_id is required")
+    if not name:
+        raise SystemExit("name is required")
+    if not email:
+        raise SystemExit("email is required")
     server_url = args.server_url.strip() or settings.server_url or DEFAULT_SERVER_URL
     updates = {
         "server_url": server_url,
         "student_id": student_id,
+        "name": name,
         "email": email,
-        "class_code": args.class_code.strip() or settings.class_code,
+        "class_code": class_code,
     }
     if args.workspace_dir.strip():
         updates["workspace_dir"] = args.workspace_dir.strip()
-    config_path = write_user_config(settings.config_dir, updates)
-    updated_settings = load_settings(settings.project_root, config_dir=settings.config_dir)
+    config_path = write_student_profile(settings.config_dir, profile_name, updates)
+    updated_settings = load_settings(
+        settings.project_root,
+        config_dir=settings.config_dir,
+        profile_name=profile_name,
+    )
     updated_settings.workspace_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Profile    : {updated_settings.profile_name}")
     print(f"Config     : {config_path}")
     print(f"Workspace  : {updated_settings.workspace_dir}")
-    print("Next       : haocean-student login")
+    print(f"Next       : {_command_prefix()} login")
 
 
 def _ensure_student_profile(settings: Settings) -> Settings:
     config_path = settings.config_dir / "config.json"
     has_config = config_path.exists()
     student_id = settings.student_id.strip()
+    name = settings.name.strip()
     email = settings.email.strip()
     class_code = settings.class_code.strip()
 
-    if has_config and student_id and email:
+    if has_config and student_id and name and email:
         return settings
 
     if not student_id:
         student_id = input("Student ID : ").strip()
+    if not name:
+        name = input("Name       : ").strip()
     if not email:
         email = input("Email      : ").strip()
     if not class_code:
         class_code = input("Class Code (optional): ").strip()
     if not student_id:
         raise SystemExit("student_id is required")
+    if not name:
+        raise SystemExit("name is required")
     if not email:
         raise SystemExit("email is required")
 
     updates = {
         "server_url": settings.server_url or DEFAULT_SERVER_URL,
         "student_id": student_id,
+        "name": name,
         "email": email,
         "class_code": class_code,
     }
-    config_path = write_user_config(settings.config_dir, updates)
-    updated_settings = load_settings(settings.project_root, config_dir=settings.config_dir)
+    profile_name = settings.profile_name or student_id
+    config_path = write_student_profile(settings.config_dir, profile_name, updates)
+    updated_settings = load_settings(
+        settings.project_root,
+        config_dir=settings.config_dir,
+        profile_name=profile_name,
+    )
     updated_settings.workspace_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Profile    : {updated_settings.profile_name}")
     print(f"Config     : {config_path}")
     return updated_settings
+
+
+def _profile_label(profile: dict[str, str]) -> str:
+    identity = profile["student_id"] or profile["email"] or profile["profile_name"]
+    name = f" / {profile['name']}" if profile["name"] else ""
+    email = f" / {profile['email']}" if profile["email"] else ""
+    return f"{profile['profile_name']} ({identity}{name}{email})"
+
+
+def _select_profile_name(profiles: list[dict[str, str]], raw_choice: str, default_name: str) -> str:
+    choice = raw_choice.strip()
+    if not choice:
+        return default_name
+    if choice.isdigit():
+        index = int(choice)
+        if 1 <= index <= len(profiles):
+            return profiles[index - 1]["profile_name"]
+    for profile in profiles:
+        if choice == profile["profile_name"] or choice == profile["student_id"] or choice == profile["email"]:
+            return profile["profile_name"]
+    raise SystemExit(f"unknown student profile: {choice}")
+
+
+def _select_student_profile_for_login(settings: Settings) -> Settings:
+    profiles = list_student_profiles(settings.config_dir)
+    if not profiles:
+        return settings
+
+    default_name = settings.profile_name or next(
+        (profile["profile_name"] for profile in profiles if profile["active"] == "true"),
+        profiles[0]["profile_name"],
+    )
+    print("Profiles   :")
+    for index, profile in enumerate(profiles, start=1):
+        marker = "*" if profile["profile_name"] == default_name else " "
+        print(f"  {index}. {marker} {_profile_label(profile)}")
+    raw_choice = input(f"Login Profile [{default_name}]: ").strip()
+    selected_name = _select_profile_name(profiles, raw_choice, default_name)
+    set_active_profile(settings.config_dir, selected_name)
+    return load_settings(
+        settings.project_root,
+        config_dir=settings.config_dir,
+        profile_name=selected_name,
+    )
+
+
+def _print_profiles(settings: Settings) -> None:
+    profiles = list_student_profiles(settings.config_dir)
+    if not profiles:
+        print("No student profiles. Run setup first.")
+        return
+    for profile in profiles:
+        marker = "*" if profile["active"] == "true" or profile["profile_name"] == settings.profile_name else " "
+        print(
+            f"{marker} {profile['profile_name']}\t{profile['student_id']}\t"
+            f"{profile['name']}\t{profile['email']}\t{profile['server_url']}"
+        )
 
 
 def _run_login_flow(
@@ -158,13 +286,20 @@ def _run_login_flow(
     *,
     startup_rendered: bool = False,
 ) -> None:
-    student_id = ensure_student_auth(client, settings, show_startup=not startup_rendered)
+    print(f"Account    : {settings.student_id} / {settings.name} / {settings.email}")
+    student_id = ensure_student_auth(
+        client,
+        settings,
+        show_startup=not startup_rendered,
+        force_code=True,
+    )
     if student_id:
         object.__setattr__(settings, "student_id", student_id)
     _join_configured_class(client, settings)
     print(f"Student    : {settings.student_id}")
+    print(f"Name       : {settings.name}")
     print(f"Workspace  : {settings.workspace_dir}")
-    print("Next       : haocean-student list")
+    print(f"Next       : {_command_prefix()} list")
 
 
 def _print_assignments(client: ModuleBClient, settings: Settings) -> None:
@@ -193,6 +328,24 @@ def _print_classes(client: ModuleBClient, settings: Settings) -> None:
         return
     for item in classes:
         print(f"{item.class_id}\t{item.course_title}\t{item.class_name}\t{item.joined_at or ''}")
+
+
+def _print_peer_review_tasks(
+    client: ModuleBClient,
+    settings: Settings,
+    assignment_id: str = "",
+) -> None:
+    tasks = client.list_peer_review_tasks(settings.student_id, assignment_id=assignment_id)
+    if not tasks:
+        print("No peer review tasks.")
+        return
+    for item in tasks:
+        title = item.assignment_title or ""
+        print(
+            f"{item.assignment_id}\t{title}\t"
+            f"submission={item.submission_id}\ttarget={item.target_student_id}"
+        )
+    print(f"Submit     : {_command_prefix()} peer-review <submission_id> <score> --comment \"...\"")
 
 
 def _run_sync(settings: Settings, client: ModuleBClient, *, allow_zip: bool = False) -> None:
@@ -244,6 +397,11 @@ def _print_preview(settings: Settings, assignment_id: str, allow_zip: bool) -> N
 
 def main() -> None:
     args = build_parser().parse_args()
+
+    if args.command == "ai-help":
+        run_ai_help(args.question, force_local=args.local)
+        return
+
     settings = load_settings()
     configure_logging(settings.log_path)
 
@@ -251,7 +409,12 @@ def main() -> None:
         _handle_setup(args, settings)
         return
 
+    if args.command == "profiles":
+        _print_profiles(settings)
+        return
+
     if args.command in {None, "login"}:
+        settings = _select_student_profile_for_login(settings)
         startup_rendered = _render_login_startup_if_needed(settings)
         settings = _ensure_student_profile(settings)
         client = _build_client(settings)
@@ -302,6 +465,11 @@ def main() -> None:
         return
 
     if args.command == "peer-review":
+        if args.submission_id is None and args.score is None:
+            _print_peer_review_tasks(client, settings, args.assignment_id)
+            return
+        if args.submission_id is None or args.score is None:
+            raise SystemExit("peer-review requires both submission_id and score")
         result = client.submit_peer_review(
             reviewer_student_id=settings.student_id,
             submission_id=args.submission_id,

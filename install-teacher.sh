@@ -39,5 +39,5 @@ echo "If 'haocean-teacher' is not found, add this to your shell profile:"
 echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
 echo
 echo "Next:"
-echo "  haocean-teacher setup --teacher-id T001 --email teacher@example.com"
+echo "  haocean-teacher setup"
 echo "  haocean-teacher login"

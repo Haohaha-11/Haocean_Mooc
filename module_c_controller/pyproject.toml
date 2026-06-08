@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "haocean-mooc-teacher-cli"
 version = "0.1.0"
-description = "Haocean MOOC teacher terminal client"
+description = "Haocean Mooc teacher terminal client"
 requires-python = ">=3.10"
 dependencies = [
   "requests>=2.31",

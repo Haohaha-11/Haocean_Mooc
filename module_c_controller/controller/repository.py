@@ -7,7 +7,11 @@ from .models import Submission
 
 
 class SubmissionRepository(Protocol):
-    def list_submissions(self, status: str | None = None) -> list[Submission]:
+    def list_submissions(
+        self,
+        status: str | None = None,
+        assignment_id: str | None = None,
+    ) -> list[Submission]:
         ...
 
     def get_submission(self, submission_id: int) -> Submission | None:

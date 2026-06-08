@@ -77,7 +77,7 @@ def _render_info_panel(
         ("Mode  interactive CLI", TEXT_COLOR),
     ]
     lower = [
-        ("Haocean MOOC CLI", ACCENT_COLOR),
+        ("Haocean Mooc CLI", ACCENT_COLOR),
         *[(line, TEXT_COLOR) for line in _usage_lines(role_label)],
     ]
     blank_count = max(target_height - len(upper) - len(lower), 1)
@@ -147,19 +147,26 @@ def save_cached_token(token_file: Path, token: str) -> None:
     token_file.write_text(token.strip() + "\n", encoding="utf-8")
 
 
-def ensure_student_auth(client: ModuleBClient, settings: Settings) -> str:
+def ensure_student_auth(
+    client: ModuleBClient,
+    settings: Settings,
+    *,
+    show_startup: bool = True,
+    force_code: bool = False,
+) -> str:
     health = client.health()
     if not health.get("auth_required"):
         return settings.student_id.strip()
 
     token = settings.auth_token or read_cached_token(settings.auth_token_file)
-    render_startup("Student", settings.server_url)
-    if token:
+    if token and not force_code:
         client.auth_token = token
         student_id = settings.student_id.strip() or input("Student ID : ").strip()
-        print("Status     : signed in with cached token")
+        print("Auth       : cached token")
         return student_id
 
+    if show_startup:
+        render_startup("Student", settings.server_url)
     email = settings.email.strip() or input("Email      : ").strip()
     student_id = settings.student_id.strip() or input("Student ID : ").strip()
     if not email:

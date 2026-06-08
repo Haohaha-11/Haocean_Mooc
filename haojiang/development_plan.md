@@ -87,7 +87,7 @@ PYTHONPATH=. .venv/bin/python tests/test_grade_pending_guard.py
 
 Move from repository-local development commands to installable Linux terminal tools:
 
-- Student command: `haocean`
+- Student command: `haocean-student`
 - Teacher command: `haocean-teacher`
 - Student local state: `~/.haocean/`
 - Teacher local state: `~/.haocean-teacher/`
@@ -110,18 +110,18 @@ Move from repository-local development commands to installable Linux terminal to
     - `GET /v1/submissions/{submission_id}/download`
 
 - Module A:
-  - Added `pyproject.toml` console script: `haocean`.
+  - Added `pyproject.toml` console script: `haocean-student`.
   - Default public server: `https://student.haoceanlab.cn`.
   - Added `~/.haocean/config.json` support.
   - Added commands:
-    - `haocean setup`
-    - `haocean login`
-    - `haocean join`
-    - `haocean classes`
-    - `haocean list`
-    - `haocean submit`
-    - `haocean feedback`
-    - `haocean watch`
+    - `haocean-student setup`
+    - `haocean-student login`
+    - `haocean-student join`
+    - `haocean-student classes`
+    - `haocean-student list`
+    - `haocean-student submit`
+    - `haocean-student feedback`
+    - `haocean-student watch`
 
 - Module C:
   - Added `pyproject.toml` console script: `haocean-teacher`.

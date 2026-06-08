@@ -5,6 +5,7 @@ from dataclasses import field
 import json
 import os
 from pathlib import Path
+import re
 
 try:
     from dotenv import load_dotenv
@@ -58,6 +59,124 @@ def _config_str(config: dict[str, object], key: str) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _clean_updates(updates: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in updates.items() if value not in (None, "")}
+
+
+def _safe_profile_file_name(profile_name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", profile_name.strip())
+    return safe or "default"
+
+
+def _profile_name_from_config(config: dict[str, object]) -> str:
+    return (
+        _config_str(config, "profile_name")
+        or _config_str(config, "student_id")
+        or _config_str(config, "email")
+        or "default"
+    )
+
+
+def _profile_dict(config: dict[str, object]) -> dict[str, dict[str, object]]:
+    raw_profiles = config.get("profiles")
+    if not isinstance(raw_profiles, dict):
+        return {}
+    profiles: dict[str, dict[str, object]] = {}
+    for key, value in raw_profiles.items():
+        if isinstance(value, dict):
+            profile_name = str(key).strip()
+            if profile_name:
+                profiles[profile_name] = dict(value)
+    return profiles
+
+
+def _base_config(config: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in config.items()
+        if key not in {"active_profile", "profiles"}
+    }
+
+
+def _select_profile_config(
+    config: dict[str, object],
+    profile_name: str = "",
+) -> tuple[str, dict[str, object]]:
+    profiles = _profile_dict(config)
+    if not profiles:
+        return "", dict(config)
+
+    selected_name = profile_name.strip() or _config_str(config, "active_profile")
+    if selected_name not in profiles:
+        selected_name = next(iter(profiles))
+    selected = {
+        **_base_config(config),
+        **profiles[selected_name],
+        "profile_name": selected_name,
+    }
+    return selected_name, selected
+
+
+def _migrate_flat_config_to_profiles(config: dict[str, object]) -> dict[str, dict[str, object]]:
+    profiles = _profile_dict(config)
+    if profiles:
+        return profiles
+
+    flat = _base_config(config)
+    if not any(_config_str(flat, key) for key in ("student_id", "name", "email", "server_url")):
+        return {}
+    profile_name = _profile_name_from_config(flat)
+    return {profile_name: flat}
+
+
+def _copy_legacy_token_to_profile(config_dir: Path, profile_name: str) -> None:
+    if not profile_name:
+        return
+    legacy_token = config_dir / "auth_token"
+    profile_token = config_dir / "auth_tokens" / _safe_profile_file_name(profile_name)
+    if not legacy_token.exists() or profile_token.exists():
+        return
+    try:
+        token = legacy_token.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if not token:
+        return
+    try:
+        profile_token.parent.mkdir(parents=True, exist_ok=True)
+        profile_token.write_text(token + "\n", encoding="utf-8")
+    except OSError:
+        return
+
+
+def list_student_profiles(config_dir: Path) -> list[dict[str, str]]:
+    config = _read_user_config(config_dir)
+    profiles = _profile_dict(config)
+    if not profiles:
+        flat = _base_config(config)
+        if not flat:
+            return []
+        profile_name = _profile_name_from_config(flat)
+        profiles = {profile_name: flat}
+
+    active_profile = _config_str(config, "active_profile")
+    result: list[dict[str, str]] = []
+    for profile_name, profile in profiles.items():
+        merged = {**_base_config(config), **profile}
+        result.append(
+            {
+                "profile_name": profile_name,
+                "student_id": _config_str(merged, "student_id"),
+                "name": _config_str(merged, "name"),
+                "email": _config_str(merged, "email"),
+                "server_url": _config_str(merged, "server_url") or DEFAULT_SERVER_URL,
+                "class_code": _config_str(merged, "class_code"),
+                "active": "true" if profile_name == active_profile else "false",
+            }
+        )
+    return result
+
+
 def _string_setting(
     config: dict[str, object],
     config_key: str,
@@ -91,7 +210,17 @@ def write_user_config(config_dir: Path, updates: dict[str, object]) -> Path:
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.json"
     current = _read_user_config(config_dir)
-    current.update({key: value for key, value in updates.items() if value not in (None, "")})
+    profiles = _profile_dict(current)
+    cleaned = _clean_updates(updates)
+    if profiles:
+        active_profile = _config_str(current, "active_profile") or next(iter(profiles))
+        profile = dict(profiles.get(active_profile, {}))
+        profile.update(cleaned)
+        profiles[active_profile] = profile
+        current["profiles"] = profiles
+        current["active_profile"] = active_profile
+    else:
+        current.update(cleaned)
     config_path.write_text(
         json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -99,12 +228,72 @@ def write_user_config(config_dir: Path, updates: dict[str, object]) -> Path:
     return config_path
 
 
+def write_student_profile(
+    config_dir: Path,
+    profile_name: str,
+    updates: dict[str, object],
+    *,
+    make_active: bool = True,
+) -> Path:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.json"
+    current = _read_user_config(config_dir)
+    had_profiles = bool(_profile_dict(current))
+    migrated_profiles = _migrate_flat_config_to_profiles(current)
+    profiles = dict(migrated_profiles)
+    cleaned = _clean_updates(updates)
+    selected_name = profile_name.strip() or _profile_name_from_config(cleaned)
+    profile = dict(profiles.get(selected_name, {}))
+    profile.update(cleaned)
+    profiles[selected_name] = profile
+
+    next_config = _base_config(current) if had_profiles else {}
+    next_config["profiles"] = profiles
+    if make_active:
+        next_config["active_profile"] = selected_name
+    elif "active_profile" not in next_config and profiles:
+        next_config["active_profile"] = next(iter(profiles))
+
+    config_path.write_text(
+        json.dumps(next_config, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if not had_profiles:
+        for migrated_name in migrated_profiles:
+            _copy_legacy_token_to_profile(config_dir, migrated_name)
+    return config_path
+
+
+def set_active_profile(config_dir: Path, profile_name: str) -> Path:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.json"
+    current = _read_user_config(config_dir)
+    had_profiles = bool(_profile_dict(current))
+    profiles = _migrate_flat_config_to_profiles(current)
+    if profile_name not in profiles:
+        raise ValueError(f"student profile does not exist: {profile_name}")
+    current = {
+        **(_base_config(current) if had_profiles else {}),
+        "active_profile": profile_name,
+        "profiles": profiles,
+    }
+    config_path.write_text(
+        json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if not had_profiles:
+        _copy_legacy_token_to_profile(config_dir, profile_name)
+    return config_path
+
+
 @dataclass(frozen=True)
 class Settings:
     project_root: Path = PROJECT_ROOT
     config_dir: Path = field(default_factory=default_config_dir)
+    profile_name: str = ""
     server_url: str = DEFAULT_SERVER_URL
     student_id: str = ""
+    name: str = ""
     email: str = ""
     auth_token: str = ""
     auth_token_file: Path = field(default_factory=lambda: default_config_dir() / "auth_token")
@@ -131,13 +320,24 @@ def _int_env(name: str, default: int) -> int:
     return int(value) if value else default
 
 
-def load_settings(project_root: Path = PROJECT_ROOT, config_dir: Path | None = None) -> Settings:
+def load_settings(
+    project_root: Path = PROJECT_ROOT,
+    config_dir: Path | None = None,
+    profile_name: str = "",
+) -> Settings:
     load_dotenv(project_root / ".env")
     resolved_config_dir = (config_dir or default_config_dir()).expanduser().resolve()
     user_config = _read_user_config(resolved_config_dir)
+    selected_profile_name, user_config = _select_profile_config(user_config, profile_name)
+    default_auth_token_file = (
+        f"auth_tokens/{_safe_profile_file_name(selected_profile_name)}"
+        if selected_profile_name
+        else "auth_token"
+    )
     return Settings(
         project_root=project_root.resolve(),
         config_dir=resolved_config_dir,
+        profile_name=selected_profile_name,
         server_url=_string_setting(
             user_config,
             "server_url",
@@ -150,6 +350,13 @@ def load_settings(project_root: Path = PROJECT_ROOT, config_dir: Path | None = N
             "MODULE_A_STUDENT_ID",
             "",
             "STUDENT_ID",
+        ),
+        name=_string_setting(
+            user_config,
+            "name",
+            "MODULE_A_NAME",
+            "",
+            "STUDENT_NAME",
         ),
         email=_string_setting(
             user_config,
@@ -169,7 +376,7 @@ def load_settings(project_root: Path = PROJECT_ROOT, config_dir: Path | None = N
             user_config,
             "auth_token_file",
             "MODULE_A_AUTH_TOKEN_FILE",
-            "auth_token",
+            default_auth_token_file,
             resolved_config_dir,
             project_root,
         ),

@@ -25,6 +25,7 @@ class Assignment:
     class_id: str | None = None
     class_name: str | None = None
     course_title: str | None = None
+    assignment_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,23 @@ class FeedbackItem:
     comment: str | None
     feedback_path: str | None
     feedback_markdown: str
+
+
+@dataclass(frozen=True)
+class PeerReviewResult:
+    assignment_id: str
+    submission_id: int
+    reviewer_student_id: str
+    score: int
+
+
+@dataclass(frozen=True)
+class PeerReviewTask:
+    assignment_id: str
+    reviewer_student_id: str
+    submission_id: int
+    target_student_id: str
+    assignment_title: str | None = None
 
 
 class ModuleBClient:
@@ -188,6 +206,44 @@ class ModuleBClient:
         response = self._request("GET", f"/v1/feedback/{student_id}")
         payload = self._payload(response)
         return [FeedbackItem(**item) for item in payload.get("feedback", [])]
+
+    def submit_peer_review(
+        self,
+        reviewer_student_id: str,
+        submission_id: int,
+        score: int,
+        comment: str = "",
+    ) -> PeerReviewResult:
+        response = self._request(
+            "POST",
+            "/v1/peer-reviews",
+            json={
+                "action": "SUBMIT_PEER_REVIEW",
+                "timestamp": int(time.time()),
+                "payload": {
+                    "reviewer_student_id": reviewer_student_id,
+                    "submission_id": submission_id,
+                    "score": score,
+                    "comment": comment,
+                },
+            },
+        )
+        return PeerReviewResult(**self._payload(response))
+
+    def list_peer_review_tasks(
+        self,
+        student_id: str = "",
+        assignment_id: str = "",
+    ) -> list[PeerReviewTask]:
+        params: dict[str, Any] = {}
+        if student_id:
+            params["student_id"] = student_id
+        if assignment_id:
+            params["assignment_id"] = assignment_id
+        kwargs: dict[str, Any] = {"params": params} if params else {}
+        response = self._request("GET", "/v1/peer-review/tasks/my", **kwargs)
+        payload = self._payload(response)
+        return [PeerReviewTask(**item) for item in payload.get("tasks", [])]
 
     def _request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
         url = f"{self.server_url}{path}"

@@ -3,7 +3,7 @@ SHELL := /usr/bin/env bash
 .PHONY: test-a test-b test-c test smoke smoke-b verify clean-runtime
 
 test-a:
-	cd module_a_client && python3 -B -m unittest discover -s tests
+	cd module_a_client && .venv/bin/python -m pytest -q
 
 test-b:
 	cd module_b_server && .venv/bin/python -B -m unittest discover -s tests

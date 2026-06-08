@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "haocean-mooc-cli"
 version = "0.1.0"
-description = "Haocean MOOC student terminal client"
+description = "Haocean Mooc student terminal client"
 requires-python = ">=3.10"
 dependencies = [
   "requests>=2.31",
@@ -13,7 +13,8 @@ dependencies = [
 ]
 
 [project.scripts]
-haocean = "module_a.main:main"
+haocean = "module_a.ai_help:main"
+haocean-student = "module_a.main:main"
 
 [tool.setuptools]
 packages = ["module_a"]

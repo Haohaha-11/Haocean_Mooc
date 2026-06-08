@@ -52,24 +52,63 @@ module_b_server/
 | GET | `/v1/classes` | 教师查看自己创建的班级 |
 | POST | `/v1/classes/join` | 学生通过加入码加入班级 |
 | GET | `/v1/classes/my` | 学生查看自己已加入班级 |
+| GET | `/v1/submissions?status=pending|graded|rejected|all` | 教师查看待批改、已批改或全部提交 |
 | GET | `/v1/submissions/{submission_id}/download` | 教师下载提交包到本机 |
 
 启用认证时，学生只会看到自己班级内的开放作业；如果作业绑定了班级，未加入该班级的学生不能提交。
+
+同一老师名下 `class_name` 不可重复；`class_id` 和 `join_code` 仍是全局唯一。
+
+### 登录邮箱验证码
+
+模块 B 的登录验证码邮件兼容 new-api 的 SMTP 配置名：
+
+```env
+MODULE_B_SYSTEM_NAME=Haocean Mooc
+SMTPServer=smtp.example.com
+SMTPPort=587
+SMTPSSLEnabled=false
+SMTPForceAuthLogin=false
+SMTPAccount=your-account@example.com
+SMTPFrom=your-account@example.com
+SMTPToken=your-smtp-token
+```
+
+如果 new-api 的 SMTP 配置放在环境文件里，可以让模块 B 启动前加载它：
+
+```bash
+MODULE_B_NEW_API_ENV_FILE=/Hao/new-api/.env \
+MODULE_B_AUTH_REQUIRED=true \
+MODULE_B_DEV_VERIFICATION_LOG=false \
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+说明：
+
+- 模块 B 优先使用自身环境变量；`MODULE_B_NEW_API_ENV_FILE` 只补充未设置的值。
+- 已兼容 new-api 的 `SMTPForceAuthLogin`，以及 Outlook、SendCloud、Azure Communication 等需要 `AUTH LOGIN` 的服务。
+- 本地联调若暂时不想发邮件，可保留 `MODULE_B_DEV_VERIFICATION_LOG=true`，验证码会打印到服务端日志。
 
 ---
 
 ## 4. 扩展功能：互评与最终成绩计算
 
-模块 B 已支持期末大作业互评功能。
+模块 B 已支持期末大作业互评功能。互评开关建议在创建作业时决定：`POST /v1/assignments` 可同时传 `peer_review_enabled`、`teacher_weight` 和 `peer_weight`。开启后作业先处于提交阶段，提交结束后再切到互评阶段并分配任务。
 
 ### 已实现接口
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/v1/assignments/peer-review/config` | 配置某个作业是否开启互评 |
+| POST | `/v1/assignments` | 创建作业，并可决定是否开启互评 |
+| POST | `/v1/assignments/peer-review/config` | 兼容入口；补配或调整已有作业互评权重 |
+| POST | `/v1/assignments/{assignment_id}/peer-review/stage` | 切换提交、互评、最终计算等阶段 |
+| POST | `/v1/assignments/{assignment_id}/peer-review/tasks/auto` | 自动分配互评任务 |
+| GET | `/v1/peer-review/tasks/my` | 学生查看自己的互评任务 |
 | POST | `/v1/peer-reviews` | 学生提交互评分 |
 | POST | `/v1/assignments/{assignment_id}/calculate-final-scores` | 计算最终成绩 |
 | GET | `/v1/assignments/{assignment_id}/final-scores` | 查看最终成绩 |
+
+自动分配互评任务时，默认每个学生互评 2 份作业；如果只有 2 个学生，则相互评 1 份；只有 1 个学生无法分配互评任务。
 
 ### 评分规则
 
@@ -83,20 +122,20 @@ module_b_server/
 
 | 与老师评分差距 | 奖励 |
 |---|---|
-| ≤ 5 分 | +5 |
-| ≤ 10 分 | +3 |
-| ≤ 15 分 | +1 |
-| > 15 分 | +0 |
+| ≤ 5 分 | +1 |
+| > 5 分 | +0 |
+
+同一学生在同一作业内即使命中多个接近条件，互评准确奖励也最多为 `+1`。
 
 ### 功能验证结果
 
 当前已完成测试：
 
-1. 创建互评作业；
-2. 开启互评；
+1. 发布作业时开启互评；
+2. 提交结束后切换到互评阶段；
 3. 两名学生提交作业；
 4. 老师分别评分；
-5. 学生互评；
+5. 自动分配任务并由学生互评；
 6. 系统计算 `peer_avg_score`、`peer_bonus`、`final_score`；
 7. 最终成绩查询接口返回正常。
 
@@ -116,15 +155,23 @@ module_b_server/
 
 ### 归档内容
 
-归档包中可以包含：
+归档包面向教师下载，导出的是作业文件集合（而非服务器运行目录备份）：
 
 ```text
-database/engine.db        SQLite 数据库备份
-submissions/              学生提交文件
-feedback/                 教师反馈 Markdown
-docs/                     项目文档
-README.md                 模块 B 使用说明
+assignment_<assignment_id>_homework_files/   单作业导出目录（扁平）
+assignment_all_homework_files/               多作业导出目录（扁平）
 ```
+
+导出命名规则：
+
+```text
+{assignment_id}_{student_id}_{submission_id}_{original_filename}
+```
+
+过滤规则：
+
+- 排除：`__pycache__/`、`.git/`、`.venv/`、`node_modules/`、`.DS_Store`、`Thumbs.db`、`*.pyc`、`*.log`、`*.tmp`、`*.db`、`*.sqlite`、`*.zip`、`*.tar`、`*.gz`
+- 保留：`.py`、`.c`、`.cpp`、`.h`、`.java`、`.js`、`.html`、`.css`、`.md`、`.txt`、`.pdf`、`.docx`、`.xlsx`、`.ipynb`、`.png`、`.jpg`、`.jpeg`
 
 ### 生成归档包示例
 
@@ -139,10 +186,10 @@ curl -X POST http://127.0.0.1:8000/v1/archives/course \
     \"payload\": {
       \"archive_name\": \"${ARCHIVE_NAME}\",
       \"note\": \"课程结束归档\",
-      \"include_db\": true,
+      \"include_db\": false,
       \"include_submissions\": true,
-      \"include_feedback\": true,
-      \"include_docs\": true
+      \"include_feedback\": false,
+      \"include_docs\": false
     }
   }"
 ```
@@ -197,3 +244,85 @@ unzip -l /tmp/downloaded_course_archive.zip | head -50
 ```text
 /Hao/gongchuang/docs/api_spec.md
 ```
+---
+
+## 6. 扩展功能：查重检测
+
+模块 B 已支持作业查重功能。
+
+### 已实现接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/v1/plagiarism/check` | 对某个作业进行查重 |
+| GET | `/v1/plagiarism/reports/{assignment_id}` | 查询某个作业的查重报告 |
+
+### 当前查重方式
+
+当前支持三种查重方式：
+
+- `token`：只做本地 token 查重，不调用外部模型。
+- `hybrid`：先做本地 token 预筛，再把高风险提交对交给 DeepSeek 复核，推荐日常使用。
+- `ai`：同样先按本地分数排序和限流，再使用 DeepSeek 复核；如需全量两两 AI 复核，可把 `ai_prefilter` 设为 `0` 并调大 `ai_limit`。
+
+处理流程：
+
+1. 读取学生提交压缩包中的文本/代码文件；
+2. 候选范围包含当前作业内同期提交，以及当前作业提交与最近三年历史提交的交叉比较；
+3. 同一个学生自己的多次提交不互相判为疑似；
+4. 转成小写；
+5. 过滤数字、下划线、标点；
+6. 只保留中文和英文 token；
+7. 计算 token 集合相似度；
+8. `token` 模式下，相似度超过阈值则记录为疑似重复；
+9. `hybrid` / `ai` 模式下，只把本地预筛命中的候选对发给 DeepSeek，返回 AI 相似度、判断理由和证据点。
+
+DeepSeek 配置：
+
+```env
+DEEPSEEK_API_KEY=your-deepseek-key
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_PREFILTER_SIMILARITY=0.45
+DEEPSEEK_MAX_CANDIDATE_PAIRS=12
+DEEPSEEK_MAX_CHARS_PER_SUBMISSION=8000
+DEEPSEEK_TIMEOUT_SECONDS=30
+```
+
+默认使用 `deepseek-v4-flash` 并关闭 V4 thinking 模式，优先保证批量查重速度和成本可控。
+
+### 查重命令示例
+
+```bash
+ASSIGNMENT_ID="home_1"
+
+curl -X POST http://127.0.0.1:8000/v1/plagiarism/check \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"action\": \"CHECK_PLAGIARISM\",
+    \"timestamp\": $(date +%s),
+    \"payload\": {
+      \"assignment_id\": \"${ASSIGNMENT_ID}\",
+      \"threshold\": 0.75,
+      \"method\": \"hybrid\",
+      \"ai_prefilter\": 0.45,
+      \"ai_limit\": 12
+    }
+  }"
+```
+
+### 查询报告示例
+
+```bash
+curl http://127.0.0.1:8000/v1/plagiarism/reports/${ASSIGNMENT_ID}
+```
+
+### 图形化界面对接
+
+图形化界面不需要直接访问数据库，只需要调用模块 B 的 HTTP 接口：
+
+```text
+POST /v1/plagiarism/check
+GET  /v1/plagiarism/reports/{assignment_id}
+```
+
+教师端可以增加“查重”按钮，点击后调用 `/v1/plagiarism/check`，并展示 `suspected_pairs`。

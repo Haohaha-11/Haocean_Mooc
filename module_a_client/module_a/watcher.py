@@ -51,6 +51,7 @@ class AssignmentWatcher:
         debounce_seconds: float = 3.0,
         poll_interval_seconds: float = 1.0,
         assignment_filter: str = "",
+        allow_zip: bool = False,
     ) -> None:
         if not student_id:
             raise ValueError("student_id is required")
@@ -62,6 +63,7 @@ class AssignmentWatcher:
         self.debounce_seconds = debounce_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.assignment_filter = assignment_filter.strip()
+        self.allow_zip = allow_zip
         self._last_snapshots: dict[str, dict[str, FileState]] = {}
         self._dirty_since: dict[str, float] = {}
         self._last_submitted: dict[str, dict[str, FileState]] = {}
@@ -148,6 +150,7 @@ class AssignmentWatcher:
             cache_dir=self.cache_dir,
             student_id=self.student_id,
             assignment_id=assignment_id,
+            allow_zip=self.allow_zip,
         )
         result = self.client.submit_assignment(
             student_id=self.student_id,

@@ -148,13 +148,18 @@ class ArchiveExportBundleTests(unittest.TestCase):
 
         with zipfile.ZipFile(zip_path, "r") as zf:
             names = zf.namelist()
+            course_scores = zf.read("scores/course_final_scores.csv").decode("utf-8")
+            assignment_scores = zf.read("scores/assignment_scores.csv").decode("utf-8")
 
         self.assertTrue(names, "archive should contain exported homework files")
+        homework_names = [name for name in names if name.startswith("assignment_A1_homework_files/")]
         self.assertTrue(
-            all(name.startswith("assignment_A1_homework_files/") for name in names),
+            homework_names,
             "all files should be in one flat assignment folder",
         )
-        self.assertTrue(all(name.count("/") == 1 for name in names), "zip should be flat under one folder")
+        self.assertIn("student_id,assignment_count,total_weight,weighted_points,course_score", course_scores)
+        self.assertIn("submission_id,student_id,assignment_id", assignment_scores)
+        self.assertTrue(all(name.count("/") == 1 for name in homework_names), "zip should be flat under one folder")
         self.assertTrue(
             all(
                 "__pycache__" not in name
@@ -162,47 +167,47 @@ class ArchiveExportBundleTests(unittest.TestCase):
                 and "venv" not in name
                 and ".mypy_cache" not in name
                 and ".pytest_cache" not in name
-                for name in names
+                for name in homework_names
             ),
             "excluded directories must not appear in archive",
         )
         self.assertTrue(
-            all(not name.endswith((".db", ".log", ".pyc")) for name in names),
+            all(not name.endswith((".db", ".log", ".pyc")) for name in homework_names),
             "excluded system/cache files must not appear in archive",
         )
         self.assertTrue(
-            any(name.endswith("_main.py") and "_20240001_" in name for name in names),
+            any(name.endswith("_main.py") and "_20240001_" in name for name in homework_names),
             "student 1 main.py should be prefixed and exported",
         )
         self.assertTrue(
-            any(name.endswith("_main.py") and "_20240002_" in name for name in names),
+            any(name.endswith("_main.py") and "_20240002_" in name for name in homework_names),
             "student 2 main.py should be prefixed and exported",
         )
         self.assertTrue(
-            any("_main_2.py" in name for name in names),
+            any("_main_2.py" in name for name in homework_names),
             "duplicate basename from same submission should be deduplicated",
         )
         self.assertTrue(
-            any(name.endswith(".py") and "_20240002_" in name for name in names),
+            any(name.endswith(".py") and "_20240002_" in name for name in homework_names),
             "unicode/space filename should be sanitized and exported",
         )
         self.assertTrue(
-            any(name.endswith(".hpp") and "_20240001_" in name for name in names),
+            any(name.endswith(".hpp") and "_20240001_" in name for name in homework_names),
             "allowed code headers should be exported",
         )
         self.assertTrue(
-            any(name.endswith(".pptx") and "_20240002_" in name for name in names),
+            any(name.endswith(".pptx") and "_20240002_" in name for name in homework_names),
             "allowed office files should be exported",
         )
         self.assertTrue(
-            any(name.endswith("_main.py") and "_20240003_" in name for name in names),
+            any(name.endswith("_main.py") and "_20240003_" in name for name in homework_names),
             "zip submission should be unpacked and exported as regular homework files",
         )
         self.assertFalse(
-            any(name.endswith((".zip", ".tar", ".gz")) for name in names),
+            any(name.endswith((".zip", ".tar", ".gz")) for name in homework_names),
             "teacher archive must not include nested archives",
         )
-        for name in names:
+        for name in homework_names:
             base_name = Path(name).name
             self.assertIsNotNone(
                 re.fullmatch(r"[A-Za-z0-9._-]+", base_name),

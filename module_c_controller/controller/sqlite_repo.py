@@ -11,8 +11,15 @@ class SQLiteSubmissionRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def list_submissions(self, status: str | None = None) -> list[Submission]:
-        return db.list_submissions(self.settings.db_path, status)
+    def list_submissions(
+        self,
+        status: str | None = None,
+        assignment_id: str | None = None,
+    ) -> list[Submission]:
+        submissions = db.list_submissions(self.settings.db_path, status)
+        if not assignment_id:
+            return submissions
+        return [item for item in submissions if item.assignment_id == assignment_id]
 
     def get_submission(self, submission_id: int) -> Submission | None:
         return db.get_submission(self.settings.db_path, submission_id)
