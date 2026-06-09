@@ -9,6 +9,7 @@ from controller.auth import ensure_teacher_auth
 from controller.api_client import ClassInfo, ModuleCApiError
 from controller.config import Settings, load_settings, write_teacher_profile
 from controller.main import (
+    build_parser,
     _handle_setup,
     _choose_class_id,
     _derive_peer_review_weights,
@@ -97,6 +98,12 @@ def make_class_info(class_id: str, class_name: str) -> ClassInfo:
         created_at="2026-06-08 00:00:00",
         status="active",
     )
+
+
+def test_teacher_parser_accepts_guide_before_auth() -> None:
+    args = build_parser().parse_args(["guide"])
+
+    assert args.command == "guide"
 
 
 def test_cached_teacher_token_skips_startup_art(monkeypatch, tmp_path: Path) -> None:

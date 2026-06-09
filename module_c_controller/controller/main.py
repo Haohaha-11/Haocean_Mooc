@@ -41,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("login", help="Login with email verification code")
     subparsers.add_parser("profiles", help="List local teacher profiles")
+    subparsers.add_parser("guide", help="Print the installed teacher usage guide")
     tui = subparsers.add_parser("tui", help="Open pending-review TUI")
     tui.add_argument("assignment_id", nargs="?", default="")
     subparsers.add_parser("class", help="Create a class interactively")
@@ -151,6 +152,17 @@ def _command_prefix() -> str:
     if command == "haocean-teacher":
         return "haocean-teacher"
     return f"{sys.executable} {sys.argv[0]}"
+
+
+def _print_installed_guide(settings: Settings) -> None:
+    guide_path = settings.config_dir / "docs" / "teacher_usage_guide.md"
+    if not guide_path.exists():
+        print(f"Guide      : not found at {guide_path}")
+        print("Reinstall with install-teacher.sh or read docs/teacher_usage_guide.md on GitHub.")
+        return
+    print(f"Guide      : {guide_path}")
+    print()
+    print(guide_path.read_text(encoding="utf-8"))
 
 
 def _require_http_repo(settings: Settings) -> ModuleBRepository:
@@ -1065,6 +1077,10 @@ def main() -> None:
 
     if args.command == "setup":
         _handle_setup(args, settings)
+        return
+
+    if args.command == "guide":
+        _print_installed_guide(settings)
         return
 
     if args.command in {None, "login"}:

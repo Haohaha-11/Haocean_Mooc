@@ -27,7 +27,6 @@ except ModuleNotFoundError:
 
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 SYSTEM_PROMPT = """\
@@ -37,7 +36,7 @@ SYSTEM_PROMPT = """\
 - 学生端正式命令是 haocean-student，配置目录是 ~/.haocean/。
 - 学生端支持本地多 profile：setup --profile <name>、profiles、login 选择身份。
 - 教师端正式命令是 haocean-teacher，配置目录是 ~/.haocean-teacher/。
-- haocean ai-help 是帮助入口，不是学生端日常提交命令。
+- haocean ai-help 是本机帮助入口，只使用用户本机配置的 DeepSeek key，不调用 Haocean 服务端。
 - 学生 HTTPS 服务入口是 https://student.haoceanlab.cn。
 - 教师 HTTPS 服务入口是 https://teacher.haoceanlab.cn。
 
@@ -48,26 +47,31 @@ SYSTEM_PROMPT = """\
 4. haocean-student join JOIN101
 5. haocean-student classes
 6. haocean-student list
-7. 把作业放进 ~/.haocean/workspace/<assignment_id>/
-8. haocean-student submit <assignment_id>
-9. haocean-student feedback
+7. 如果有资料包，haocean-student materials <assignment_id>
+8. 把作业放进 ~/.haocean/workspace/<assignment_id>/
+9. haocean-student preview <assignment_id>
+10. haocean-student submit <assignment_id>
+11. haocean-student feedback
+12. haocean-student guide 查看本机学生指南
 
 教师常用流程：
 1. haocean-teacher setup
 2. haocean-teacher login
 3. haocean-teacher class
 4. haocean-teacher select
-5. haocean-teacher publish
+5. haocean-teacher publish，可以用 --materials 上传作业说明文件或附件目录
 6. haocean-teacher grade 或 haocean-teacher tui
 7. haocean-teacher download <submission_id> --extract
 8. haocean-teacher plagiarism <assignment_id> --check --method hybrid
 9. haocean-teacher stats <assignment_id>
 10. haocean-teacher archive create --name course_archive.zip
+11. haocean-teacher guide 查看本机教师指南
 
 规则：
 - 优先给出可直接复制执行的命令。
 - 不要要求用户登录服务器。
 - 不要编造不存在的子命令。
+- 不要建议 module_a_client/.venv 或 module_c_controller/.venv 这种开发环境命令。
 - 如果问题不属于 Haocean Mooc CLI 使用范围，简短说明你只能回答本应用使用问题。
 """
 
@@ -82,14 +86,18 @@ Haocean Mooc CLI 本地帮助
   haocean-student join JOIN101
   haocean-student classes
   haocean-student list
+  haocean-student materials home_001
   haocean-student submit home_001
   haocean-student feedback
+  haocean-student guide
 
 学生提交作业：
-  1. 把文件放到 ~/.haocean/workspace/<assignment_id>/
-  2. 先预览：haocean-student preview <assignment_id>
-  3. 提交：haocean-student submit <assignment_id>
-  4. 查看反馈：haocean-student feedback
+  1. 查看作业：haocean-student list
+  2. 有资料包时先下载：haocean-student materials <assignment_id>
+  3. 把文件放到 ~/.haocean/workspace/<assignment_id>/
+  4. 先预览：haocean-student preview <assignment_id>
+  5. 提交：haocean-student submit <assignment_id>
+  6. 查看反馈：haocean-student feedback
 
 教师端：
   haocean-teacher setup
@@ -97,13 +105,16 @@ Haocean Mooc CLI 本地帮助
   haocean-teacher class
   haocean-teacher select
   haocean-teacher publish
+  haocean-teacher publish home_001 "Homework 1" --materials ./home_001_spec.pdf
   haocean-teacher grade
   haocean-teacher download <submission_id> --extract
   haocean-teacher plagiarism <assignment_id> --check --method hybrid
   haocean-teacher stats <assignment_id>
+  haocean-teacher guide
 
 AI 帮助：
-  export DEEPSEEK_API_KEY=你的新 DeepSeek key
+  # 只读取你本机的环境变量或 ~/.haocean/ai.env，不调用 Haocean 服务端测试 AI
+  export HAOCEAN_DEEPSEEK_API_KEY=你的新 DeepSeek key
   haocean ai-help
   haocean ai-help "怎么提交作业？"
 """
@@ -149,9 +160,24 @@ def _int_env(env: Mapping[str, str], name: str, default: int) -> int:
         return default
 
 
+def load_user_ai_help_env() -> None:
+    custom_env_file = os.getenv("HAOCEAN_AI_ENV_FILE", "").strip()
+    candidates = []
+    if custom_env_file:
+        candidates.append(Path(custom_env_file).expanduser())
+    candidates.extend(
+        [
+            Path("~/.haocean/ai.env").expanduser(),
+            Path("~/.haocean/.env").expanduser(),
+        ]
+    )
+    for env_file in candidates:
+        load_dotenv(env_file, override=False)
+
+
 def load_ai_help_config(env: Mapping[str, str] | None = None) -> AIHelpConfig:
     if env is None:
-        load_dotenv(PROJECT_ROOT / ".env")
+        load_user_ai_help_env()
     source = os.environ if env is None else env
     return AIHelpConfig(
         api_key=_env_value(source, "DEEPSEEK_API_KEY", "HAOCEAN_DEEPSEEK_API_KEY"),

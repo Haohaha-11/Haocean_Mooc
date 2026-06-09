@@ -5,6 +5,8 @@ REPO_URL="${HAOCEAN_REPO_URL:-https://github.com/Haohaha-11/Haocean_Mooc.git}"
 REF="${HAOCEAN_VERSION:-main}"
 RAW_BASE="${HAOCEAN_RAW_BASE:-https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/${REF}}"
 BIN_DIR="${HAOCEAN_BIN_DIR:-$HOME/.local/bin}"
+STUDENT_DATA_DIR="${HAOCEAN_HOME:-$HOME/.haocean}"
+TEACHER_DATA_DIR="${HAOCEAN_TEACHER_HOME:-$HOME/.haocean-teacher}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
@@ -28,6 +30,8 @@ echo "Haocean CLI tools installed."
 echo "Student : $BIN_DIR/haocean-student"
 echo "Teacher : $BIN_DIR/haocean-teacher"
 echo "AI help : $BIN_DIR/haocean ai-help"
+echo "Guides  : $STUDENT_DATA_DIR/docs/student_usage_guide.md"
+echo "          $TEACHER_DATA_DIR/docs/teacher_usage_guide.md"
 echo
 echo "Add this to your shell profile if commands are not found:"
 echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""

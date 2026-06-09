@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("login", help="Login with email verification code")
     subparsers.add_parser("profiles", help="List local student profiles")
+    subparsers.add_parser("guide", help="Print the installed student usage guide")
     subparsers.add_parser("list", help="List open assignments")
     materials = subparsers.add_parser("materials", help="Download assignment materials")
     materials.add_argument("assignment_id", nargs="?", default="", help="Assignment ID")
@@ -80,6 +81,17 @@ def _command_prefix() -> str:
     if command in {"haocean", "haocean-student"}:
         return "haocean-student"
     return f"{sys.executable} {sys.argv[0]}"
+
+
+def _print_installed_guide(settings: Settings) -> None:
+    guide_path = settings.config_dir / "docs" / "student_usage_guide.md"
+    if not guide_path.exists():
+        print(f"Guide      : not found at {guide_path}")
+        print("Reinstall with install-student.sh or read docs/student_usage_guide.md on GitHub.")
+        return
+    print(f"Guide      : {guide_path}")
+    print()
+    print(guide_path.read_text(encoding="utf-8"))
 
 
 def _ensure_auth(client: ModuleBClient, settings: Settings) -> str:
@@ -444,6 +456,10 @@ def main() -> None:
 
     if args.command == "profiles":
         _print_profiles(settings)
+        return
+
+    if args.command == "guide":
+        _print_installed_guide(settings)
         return
 
     if args.command in {None, "login"}:

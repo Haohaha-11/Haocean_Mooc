@@ -25,7 +25,7 @@ sudo apt install -y python3 python3-venv python3-pip git curl
 ## 2. 安装教师端
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/main/install-teacher.sh | bash
+curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/main/install-teacher.sh | bash
 ```
 
 如果安装后提示找不到 `haocean-teacher`，执行：
@@ -44,7 +44,10 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 
 ```bash
 haocean-teacher --help
+haocean-teacher guide
 ```
+
+安装脚本会把教师指南保存到 `~/.haocean-teacher/docs/teacher_usage_guide.md`；`haocean-teacher guide` 会直接显示这份本机指南。
 
 ## 3. 首次配置和登录
 

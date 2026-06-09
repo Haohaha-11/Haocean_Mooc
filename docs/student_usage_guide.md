@@ -31,7 +31,7 @@ JOIN101
 ## 2. 安装学生端
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/main/install-student.sh | bash
+curl --retry 5 --retry-delay 2 -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/main/install-student.sh | bash
 ```
 
 如果安装后提示找不到 `haocean-student`，执行：
@@ -51,14 +51,17 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 ```bash
 haocean-student --help
 haocean ai-help --local "怎么提交作业？"
+haocean-student guide
 ```
 
-`haocean-student` 是学生端正式命令；`haocean ai-help` 只用于打开 DeepSeek 使用小助手。没有配置 `DEEPSEEK_API_KEY` 时，小助手会使用内置本地帮助。
+安装脚本会把学生指南保存到 `~/.haocean/docs/student_usage_guide.md`；`haocean-student guide` 会直接显示这份本机指南。
 
-如果学生希望 `haocean ai-help` 真正调用 DeepSeek，在学生自己的机器上配置环境变量即可：
+`haocean-student` 是学生端正式命令；`haocean ai-help` 只用于打开本机使用小助手。它不会调用 Haocean 服务端测试 AI；没有配置本机 key 时，小助手会使用内置帮助。
+
+如果学生希望 `haocean ai-help` 真正调用 DeepSeek，在学生自己的机器上配置环境变量或 `~/.haocean/ai.env` 即可：
 
 ```bash
-echo 'export DEEPSEEK_API_KEY=your-deepseek-key' >> ~/.bashrc
+echo 'export HAOCEAN_DEEPSEEK_API_KEY=your-deepseek-key' >> ~/.bashrc
 source ~/.bashrc
 haocean ai-help "怎么提交作业？"
 ```

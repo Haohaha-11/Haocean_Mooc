@@ -48,6 +48,12 @@ def test_student_parser_accepts_ai_help_before_auth() -> None:
     assert args.question == ["怎么登录"]
 
 
+def test_student_parser_accepts_guide_before_auth() -> None:
+    args = build_student_parser().parse_args(["guide"])
+
+    assert args.command == "guide"
+
+
 def test_missing_deepseek_key_uses_local_help(monkeypatch, capsys) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     monkeypatch.setenv("HAOCEAN_DEEPSEEK_API_KEY", "")
@@ -71,6 +77,20 @@ def test_invalid_ai_help_numeric_env_values_fall_back_to_defaults() -> None:
     assert config.api_key == "alternate-key"
     assert config.timeout_seconds == 30.0
     assert config.max_tokens == 900
+
+
+def test_ai_help_reads_user_ai_env_not_project_env(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("HAOCEAN_DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("HAOCEAN_AI_ENV_FILE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    user_env = tmp_path / ".haocean" / "ai.env"
+    user_env.parent.mkdir(parents=True)
+    user_env.write_text("HAOCEAN_DEEPSEEK_API_KEY=user-local-key\n", encoding="utf-8")
+
+    config = load_ai_help_config()
+
+    assert config.api_key == "user-local-key"
 
 
 def test_call_deepseek_uses_chat_completion_endpoint() -> None:
