@@ -9,10 +9,16 @@ from module_a.api_client import ModuleAApiError, ModuleBClient
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, body: dict[str, object]) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        body: dict[str, object],
+        content: bytes | None = None,
+    ) -> None:
         self.status_code = status_code
         self._body = body
         self.text = json.dumps(body, ensure_ascii=False)
+        self.content = content if content is not None else self.text.encode("utf-8")
 
     def json(self) -> dict[str, object]:
         return self._body
@@ -69,6 +75,69 @@ class ApiClientTests(unittest.TestCase):
         self.assertEqual(assignments[0].assignment_id, "home_001")
         self.assertEqual(assignments[0].assignment_weight, 2.5)
         self.assertEqual(session.calls[0]["url"], "http://server/v1/assignments/open")
+
+    def test_list_open_assignments_maps_material_fields(self) -> None:
+        session = FakeSession(
+            [
+                FakeResponse(
+                    200,
+                    {
+                        "code": 200,
+                        "message": "open assignments returned",
+                        "payload": {
+                            "assignments": [
+                                {
+                                    "assignment_id": "home_001",
+                                    "title": "Homework 1",
+                                    "has_materials": True,
+                                    "materials_file_name": "spec.pdf",
+                                    "materials_file_size": 12,
+                                    "materials_download_url": "/v1/assignments/home_001/materials/download",
+                                }
+                            ]
+                        },
+                    },
+                )
+            ]
+        )
+        client = ModuleBClient("http://server", session=session)  # type: ignore[arg-type]
+
+        assignment = client.list_open_assignments()[0]
+
+        self.assertTrue(assignment.has_materials)
+        self.assertEqual(assignment.materials_file_name, "spec.pdf")
+        self.assertEqual(assignment.materials_file_size, 12)
+
+    def test_download_assignment_materials_uses_metadata_file_name(self) -> None:
+        session = FakeSession(
+            [
+                FakeResponse(
+                    200,
+                    {
+                        "code": 200,
+                        "message": "assignment materials returned",
+                        "payload": {
+                            "assignment_id": "home_001",
+                            "has_materials": True,
+                            "materials": {
+                                "file_name": "spec.pdf",
+                                "file_size": 12,
+                            },
+                        },
+                    },
+                ),
+                FakeResponse(200, {}, content=b"material bytes"),
+            ]
+        )
+        client = ModuleBClient("http://server", session=session)  # type: ignore[arg-type]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            saved_path = client.download_assignment_materials("home_001", Path(tmp))
+
+            self.assertEqual(saved_path.name, "spec.pdf")
+            self.assertEqual(saved_path.read_bytes(), b"material bytes")
+        self.assertEqual(session.calls[0]["url"], "http://server/v1/assignments/home_001/materials")
+        self.assertEqual(session.calls[1]["url"], "http://server/v1/assignments/home_001/materials/download")
 
     def test_submit_assignment_sends_metadata_and_file(self) -> None:
         session = FakeSession(

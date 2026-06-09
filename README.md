@@ -10,6 +10,16 @@ Haocean Mooc CLI 是一个面向 Linux 终端的课程作业平台，包含学�
 
 ## 一分钟安装
 
+同一个 Linux 用户如果需要同时使用学生端和教师端：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/main/install-all.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+haocean-student --help
+haocean-teacher --help
+haocean ai-help --local "怎么提交作业？"
+```
+
 学生端：
 
 ```bash
@@ -30,6 +40,19 @@ haocean-teacher login
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
+```
+
+清理旧安装后重装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/main/install-all.sh | bash
+```
+
+默认卸载会保留 `~/.haocean/` 和 `~/.haocean-teacher/` 中的配置、token、作业工作区和下载文件。如果需要连本地数据一起删除：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/main/uninstall.sh | bash -s -- --with-data
 ```
 
 详细使用文档：
@@ -214,13 +237,45 @@ AI 分两类，key 的位置不同：
 
 | 功能 | 谁调用 DeepSeek | key 放在哪里 |
 | --- | --- | --- |
-| 老师 TUI `g`：AI 自动审作业报告 | Module B 服务端 | 服务器的 `module_b_server/.env` 或服务进程环境变量 |
-| 老师 TUI `c` / `plagiarism --check --method hybrid`：AI 查重复核 | Module B 服务端 | 服务器的 `module_b_server/.env` 或服务进程环境变量 |
+| 老师 TUI `g`：AI 自动审作业报告 | Module B 服务端 | 老师本机 `~/.haocean-teacher/.env`，或服务器统一配置 |
+| 老师 TUI `c` / `plagiarism --check --method hybrid`：AI 查重复核 | Module B 服务端 | 老师本机 `~/.haocean-teacher/.env`，或服务器统一配置 |
 | 学生/本机 `haocean ai-help` 使用小助手 | 当前学生或老师自己的终端 | 本机 shell 环境变量，例如 `~/.bashrc` |
 
-### 服务器配置：查重和 AI 审阅报告
+### 老师端配置：查重和 AI 审阅报告
 
-在部署 Module B 的服务器上配置，不需要发给老师或学生。仓库运行方式下推荐写入：
+真实老师使用时，推荐每位老师在自己的机器上配置 key。教师端会读取本机 key，并通过 `X-DeepSeek-API-Key` 请求头发给 Module B；请优先使用 HTTPS 域名。
+
+```bash
+mkdir -p ~/.haocean-teacher
+nano ~/.haocean-teacher/.env
+```
+
+示例：
+
+```dotenv
+MODULE_C_DEEPSEEK_API_KEY=your-deepseek-key
+DEEPSEEK_MODEL=deepseek-v4-flash
+```
+
+也可以放在当前 shell：
+
+```bash
+export MODULE_C_DEEPSEEK_API_KEY=your-deepseek-key
+```
+
+老师端兼容这些变量名，优先级从高到低：
+
+```text
+MODULE_C_DEEPSEEK_API_KEY
+DEEPSEEK_API_KEY
+HAOCEAN_DEEPSEEK_API_KEY
+```
+
+配置后重新打开终端，或执行 `source ~/.bashrc`。然后在 TUI 里按 `g` 查看 AI 自动审作业报告，按 `c` 查看 AI 辅助查重。
+
+### 服务器统一配置：查重和 AI 审阅报告
+
+如果学校希望服务器统一承担 AI 调用，也可以在部署 Module B 的服务器上配置。仓库运行方式下推荐写入：
 
 ```bash
 cd /Hao/gongchuang/module_b_server
@@ -262,7 +317,7 @@ curl http://127.0.0.1:8000/v1/health
 
 ### 本机配置：`haocean ai-help`
 
-`haocean ai-help` 是本机使用小助手，和服务端查重/AI 审阅报告不是同一个 key 读取位置。学生或老师如果想在自己的终端调用 DeepSeek，可以在本机配置：
+`haocean ai-help` 是本机使用小助手，和服务端查重/AI 审阅报告不是同一个 key 读取位置。学生如果想在自己的终端调用 DeepSeek，可以在本机配置：
 
 ```bash
 echo 'export DEEPSEEK_API_KEY=your-deepseek-key' >> ~/.bashrc
