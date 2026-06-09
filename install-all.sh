@@ -8,11 +8,14 @@ BIN_DIR="${HAOCEAN_BIN_DIR:-$HOME/.local/bin}"
 STUDENT_DATA_DIR="${HAOCEAN_HOME:-$HOME/.haocean}"
 TEACHER_DATA_DIR="${HAOCEAN_TEACHER_HOME:-$HOME/.haocean-teacher}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+SCRIPT_DIR=""
+if [ "${BASH_SOURCE[0]+set}" = "set" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+fi
 
 run_installer() {
   local script_name="$1"
-  if [ -f "$SCRIPT_DIR/$script_name" ]; then
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$script_name" ]; then
     HAOCEAN_REPO_URL="$REPO_URL" HAOCEAN_VERSION="$REF" HAOCEAN_BIN_DIR="$BIN_DIR" \
       bash "$SCRIPT_DIR/$script_name"
     return

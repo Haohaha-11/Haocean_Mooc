@@ -9,7 +9,10 @@ BIN_DIR="${HAOCEAN_BIN_DIR:-$HOME/.local/bin}"
 DATA_DIR="${HAOCEAN_TEACHER_HOME:-$HOME/.haocean-teacher}"
 DOC_DIR="$DATA_DIR/docs"
 VENV_DIR="$INSTALL_DIR/venv"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+SCRIPT_DIR=""
+if [ "${BASH_SOURCE[0]+set}" = "set" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required. Install Python 3.10+ first." >&2
@@ -35,7 +38,7 @@ fi
   "git+$REPO_URL@$REF#subdirectory=module_c_controller"
 
 mkdir -p "$DOC_DIR"
-if [ -f "$SCRIPT_DIR/docs/teacher_usage_guide.md" ]; then
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/docs/teacher_usage_guide.md" ]; then
   cp "$SCRIPT_DIR/docs/teacher_usage_guide.md" "$DOC_DIR/teacher_usage_guide.md"
 elif ! curl -fsSL "$RAW_BASE/docs/teacher_usage_guide.md" -o "$DOC_DIR/teacher_usage_guide.md"; then
   echo "Warning: failed to download teacher usage guide." >&2
