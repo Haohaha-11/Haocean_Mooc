@@ -10,8 +10,8 @@ DATA_DIR="${HAOCEAN_TEACHER_HOME:-$HOME/.haocean-teacher}"
 DOC_DIR="$DATA_DIR/docs"
 VENV_DIR="$INSTALL_DIR/venv"
 SCRIPT_DIR=""
-SCRIPT_SOURCE="${BASH_SOURCE-}"
-if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
+SCRIPT_SOURCE="$0"
+if [ "$SCRIPT_SOURCE" != "bash" ] && [ "$SCRIPT_SOURCE" != "sh" ] && [ -f "$SCRIPT_SOURCE" ]; then
   SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd)"
 fi
 
