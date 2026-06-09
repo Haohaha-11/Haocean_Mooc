@@ -9,8 +9,9 @@ STUDENT_DATA_DIR="${HAOCEAN_HOME:-$HOME/.haocean}"
 TEACHER_DATA_DIR="${HAOCEAN_TEACHER_HOME:-$HOME/.haocean-teacher}"
 
 SCRIPT_DIR=""
-if [ "${BASH_SOURCE[0]+set}" = "set" ] && [ -f "${BASH_SOURCE[0]}" ]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE-}"
+if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd)"
 fi
 
 run_installer() {
