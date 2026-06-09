@@ -130,6 +130,12 @@ module_a_client/.venv/bin/python -B module_a_client/scripts/run_client.py classe
 module_a_client/.venv/bin/python -B module_a_client/scripts/run_client.py list
 ```
 
+如果作业显示 `materials=yes`，先下载老师发布的作业说明和附件：
+
+```bash
+module_a_client/.venv/bin/python -B module_a_client/scripts/run_client.py materials home_local_001
+```
+
 ## 7. 准备作业文件
 
 假设老师发布的作业编号是：

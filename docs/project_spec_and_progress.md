@@ -25,6 +25,7 @@ Haocean Mooc CLI 是一个面向课程作业管理的终端化教学工具链。
 - 通过邮箱验证码登录并缓存 token。
 - 通过加入码加入课程班级。
 - 查看自己可见的开放作业。
+- 下载老师随作业发布的说明文件和附件资料包。
 - 将作业文件放入本地工作区。
 - 手动提交某个作业，或启动 watcher 自动提交稳定后的文件。
 - 拉取教师 Markdown 反馈并保存到本地。
@@ -38,6 +39,7 @@ Haocean Mooc CLI 是一个面向课程作业管理的终端化教学工具链。
 - 通过邮箱验证码登录并缓存 token。
 - 创建课程班级并生成学生加入码。
 - 发布全局作业或绑定到指定班级的作业。
+- 随作业上传说明文件或附件目录，供学生提交前下载。
 - 打开终端 TUI 查看待批改作业，输入分数和评语。
 - 下载学生提交包到本机。
 - 查看查重报告、成绩统计和学生历史成绩。
@@ -105,7 +107,8 @@ Teacher Linux terminal
 2. 教师创建班级，系统生成或保存加入码。
 3. 学生通过加入码加入班级。
 4. 教师创建作业，可以绑定某个班级，也可以作为全局作业。
-5. 学生端只展示自己有权限看到的开放作业。
+5. 教师可以随作业上传一个资料文件或附件目录，目录会打包为 zip 保存。
+6. 学生端只展示自己有权限看到的开放作业，并可下载可见作业的资料包。
 
 ### 5.2 学生提交
 
@@ -276,6 +279,7 @@ haocean-teacher archive download course_archive.zip
 - 认证：`POST /v1/auth/request-code`、`POST /v1/auth/login`
 - 班级：`POST /v1/classes`、`GET /v1/classes`、`POST /v1/classes/join`、`GET /v1/classes/my`
 - 作业：`POST /v1/assignments`、`GET /v1/assignments/open`
+- 作业资料：`POST /v1/assignments/{assignment_id}/materials`、`GET /v1/assignments/{assignment_id}/materials`、`GET /v1/assignments/{assignment_id}/materials/download`
 - 提交：`POST /v1/submissions`、`GET /v1/submissions`、`GET /v1/submissions/pending`
 - 下载：`GET /v1/submissions/{submission_id}/download`
 - 批改：`POST /v1/submissions/grade`
@@ -336,6 +340,7 @@ haocean-teacher archive download course_archive.zip
 | 学生配置和登录 | 已实现 | 支持多 profile，`setup --profile` 创建/更新身份，`login` 选择身份后邮箱验证码登录，每个 profile 独立缓存 token |
 | 学生加入班级 | 已实现 | 支持 `join` 和配置中的 `class_code` 自动加入 |
 | 学生查看作业 | 已实现 | `list` 调用开放作业接口 |
+| 学生下载作业资料 | 已实现 | `materials <assignment_id>` 下载老师发布的说明文件和附件，zip 自动解压 |
 | 学生打包提交 | 已实现 | 过滤非作业文件、生成 tar.gz、计算 MD5、上传 |
 | 学生 watcher | 已实现 | 当前基于轮询和防抖，不是 systemd/inotify 版本 |
 | 学生反馈拉取 | 已实现 | 反馈 Markdown 保存到本地 inbox |
@@ -343,7 +348,7 @@ haocean-teacher archive download course_archive.zip
 | AI 使用小助手 | 已实现 | `haocean ai-help` / `haocean-student ai-help` 读取 `DEEPSEEK_API_KEY` 调用 DeepSeek，未配置时输出本地帮助 |
 | 服务端认证 | 已实现 | 支持验证码、token、角色上下文、开发日志验证码 |
 | 服务端班级/加入码 | 已实现 | 支持创建班级、加入班级、班级作业可见性 |
-| 服务端作业发布 | 已实现 | 支持创建作业和查询开放作业 |
+| 服务端作业发布 | 已实现 | 支持创建作业、查询开放作业和作业资料包上传/下载 |
 | 服务端提交接收 | 已实现 | 支持 multipart 上传、MD5 校验、归档、入库 |
 | 服务端批改反馈 | 已实现 | 支持评分、状态更新、Markdown 反馈 |
 | 服务端提交下载 | 已实现 | 支持教师下载提交包，带权限检查 |
@@ -353,7 +358,7 @@ haocean-teacher archive download course_archive.zip
 | 服务端课程归档 | 已实现 | 支持生成、列表、下载课程归档 zip |
 | 教师 CLI 安装入口 | 已实现 | `pyproject.toml` 暴露 `haocean-teacher` |
 | 教师配置和登录 | 已实现 | 支持多 profile，`setup --profile` 创建/更新身份，`login` 选择身份后邮箱验证码登录，每个 profile 独立缓存 token |
-| 教师班级和作业命令 | 已实现 | 支持创建/查看班级、创建/查看作业工作台 |
+| 教师班级和作业命令 | 已实现 | 支持创建/查看班级、创建/查看作业工作台，发布时可上传资料文件或附件目录 |
 | 教师 TUI 批改 | 已实现 | Textual TUI 支持列表、详情、评分、下载解压、.md/.txt 预览、AI 报告、查重和历史成绩弹窗 |
 | 教师高级命令 | 已实现 | 支持查重、统计、历史、互评阶段、最终成绩、归档、下载 |
 | C 本地 Mock 模式 | 保留 | `CONTROLLER_SOURCE=sqlite` 可用于演示和离线测试 |
