@@ -84,6 +84,12 @@ haocean-student classes
 haocean-student list
 ```
 
+如果作业带有说明文件或附件，先下载资料包：
+
+```bash
+haocean-student materials home_001
+```
+
 4. 准备作业目录。作业编号是 `home_001` 时：
 
 ```bash
@@ -154,6 +160,13 @@ haocean-teacher publish
 
 ```bash
 haocean-teacher publish home_001 "Homework 1" --peer-review --teacher-weight 0.7
+```
+
+发布时可附带作业说明文件或附件目录：
+
+```bash
+haocean-teacher publish home_001 "Homework 1" --materials ./home_001_spec.pdf
+haocean-teacher publish home_002 "Homework 2" --materials ./home_002_materials/
 ```
 
 5. 打开当前作业批改总览：
