@@ -176,10 +176,13 @@ Assignment ID
 Title
 Class ID [当前选中班级]
 Description
+Materials Path
 Deadline
 Course Weight
 Peer Review
 ```
+
+`Materials Path` 可以留空；也可以填一个作业说明文件或附件目录，目录会自动打包为 zip 上传。
 
 `Deadline` 按北京时间解析。支持 `6.10`、`6.10 18:30`、`2026-06-10`、`2026-06-10 18:30`；只写日期时默认截止到当天 `23:59:59`。
 
@@ -187,6 +190,13 @@ Peer Review
 
 ```bash
 module_c_controller/.venv/bin/python -B module_c_controller/scripts/run_controller.py publish home_local_001 "Local Homework 1" --weight 2
+```
+
+带作业说明文件或附件：
+
+```bash
+module_c_controller/.venv/bin/python -B module_c_controller/scripts/run_controller.py publish home_local_001 "Local Homework 1" \
+  --materials ./home_local_001_spec.pdf
 ```
 
 如果这次作业需要互评，应在发布时就开启：

@@ -100,6 +100,9 @@ MODULE_B_DEV_VERIFICATION_LOG=false \
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/v1/assignments` | 创建作业，并可决定是否开启互评 |
+| POST | `/v1/assignments/{assignment_id}/materials` | 上传或替换作业说明文件/附件包 |
+| GET | `/v1/assignments/{assignment_id}/materials` | 查询作业资料包元数据 |
+| GET | `/v1/assignments/{assignment_id}/materials/download` | 下载作业资料包 |
 | POST | `/v1/assignments/peer-review/config` | 兼容入口；补配或调整已有作业互评权重 |
 | POST | `/v1/assignments/{assignment_id}/peer-review/stage` | 切换提交、互评、最终计算等阶段 |
 | POST | `/v1/assignments/{assignment_id}/peer-review/tasks/auto` | 自动分配互评任务 |
