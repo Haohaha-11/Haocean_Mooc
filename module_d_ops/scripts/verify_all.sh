@@ -8,6 +8,7 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:${VERIFY_B_PORT}}"
 STUDENT_ID="${STUDENT_ID:-2024001}"
 TEACHER_ID="${TEACHER_ID:-T001}"
 ASSIGNMENT_ID="module_d_verify_$(date +%s)"
+VERIFY_DEADLINE="${VERIFY_DEADLINE:-2099-12-31 23:59:59}"
 SERVER_LOG="${ROOT_DIR}/module_d_ops/module_b_verify.log"
 WORKSPACE_DIR="$(mktemp -d)"
 CACHE_DIR="$(mktemp -d)"
@@ -47,7 +48,7 @@ curl -fsS -X POST "${BASE_URL}/v1/assignments" \
       \"assignment_id\": \"${ASSIGNMENT_ID}\",
       \"title\": \"Module D Verify\",
       \"description\": \"Created by module D verification.\",
-      \"deadline\": \"2026-06-01 23:59:59\"
+      \"deadline\": \"${VERIFY_DEADLINE}\"
     }
   }" >/dev/null
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import zipfile
 
 from fastapi import HTTPException
 
@@ -509,6 +511,12 @@ class PlagiarismAndStatsTests(unittest.TestCase):
     def test_ai_grading_report_uses_local_fallback_without_key(self) -> None:
         archive_path = self.root / "ai_report.tar.gz"
         build_archive(archive_path, "def solve():\n    return 42\n")
+        materials_path = self.root / "requirements.zip"
+        with zipfile.ZipFile(materials_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "spec.md",
+                "# Requirements\n- Implement solve().\n- Return integer 42.\n",
+            )
         conn = main.get_conn()
         conn.execute(
             """
@@ -518,6 +526,23 @@ class PlagiarismAndStatsTests(unittest.TestCase):
             VALUES (?, ?, ?, ?, ?, ?, ?);
             """,
             ("home_ai_report", "AI Report", "Solve the task.", "", "T001", main.now_str(), "open"),
+        )
+        conn.execute(
+            """
+            INSERT INTO assignment_materials (
+                assignment_id, file_name, file_path, md5, file_size, uploaded_by, uploaded_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                "home_ai_report",
+                materials_path.name,
+                str(materials_path),
+                "materials-md5",
+                materials_path.stat().st_size,
+                "T001",
+                main.now_str(),
+            ),
         )
         cur = conn.execute(
             """
@@ -553,7 +578,149 @@ class PlagiarismAndStatsTests(unittest.TestCase):
         self.assertEqual(payload["source"], "local")
         self.assertEqual(payload["model"], "local-summary")
         self.assertIn("report_text", payload["report"])
+        self.assertIn("Requirement Checks:", payload["report"]["report_text"])
+        self.assertIn("Return integer 42", payload["report"]["requirements_excerpt"])
         self.assertIn("def solve", payload["report"]["submission_excerpt"])
+
+    def test_ai_grading_report_refreshes_stale_cached_schema(self) -> None:
+        archive_path = self.root / "ai_report_stale.tar.gz"
+        build_archive(archive_path, "def solve():\n    return 42\n")
+        conn = main.get_conn()
+        conn.execute(
+            """
+            INSERT INTO assignments (
+                assignment_id, title, description, deadline, created_by, created_at, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("home_ai_stale", "AI Report", "Return integer 42.", "", "T001", main.now_str(), "open"),
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO submissions (
+                student_id, assignment_id, file_name, file_path, md5, submit_time, status,
+                score, comment
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                "2024001",
+                "home_ai_stale",
+                archive_path.name,
+                str(archive_path),
+                "md5",
+                main.now_str(),
+                "graded",
+                90,
+                "Good.",
+            ),
+        )
+        submission_id = int(cur.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO ai_grading_reports (
+                submission_id, assignment_id, student_id, model, source, generated_at, report_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                submission_id,
+                "home_ai_stale",
+                "2024001",
+                "local-summary",
+                "local",
+                main.now_str(),
+                json.dumps({"summary": "old cached report"}, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        original_key = main.DEEPSEEK_API_KEY
+        main.DEEPSEEK_API_KEY = ""
+        try:
+            payload = main.get_submission_ai_grade_report(submission_id, auth=None)["payload"]
+        finally:
+            main.DEEPSEEK_API_KEY = original_key
+
+        self.assertEqual(payload["source"], "local")
+        self.assertEqual(payload["report"]["schema_version"], main.AI_GRADING_REPORT_SCHEMA_VERSION)
+        self.assertIn("Requirement Checks:", payload["report"]["report_text"])
+        self.assertIn("Return integer 42", payload["report"]["requirements_excerpt"])
+
+    def test_deepseek_grading_prompt_includes_assignment_requirements(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "summary": "按题目要求完成了 solve。",
+                                            "requirement_checks": [
+                                                {
+                                                    "requirement": "Return integer 42",
+                                                    "status": "met",
+                                                    "evidence": "submission_excerpt 中 solve() 返回 42",
+                                                    "suggestion": "补充边界测试。",
+                                                }
+                                            ],
+                                            "strengths": ["函数返回值符合要求"],
+                                            "concerns": [],
+                                            "suggestions": ["增加测试说明"],
+                                            "score_rationale": "代码满足核心要求。",
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                }
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        original_urlopen = main.urllib.request.urlopen
+        main.urllib.request.urlopen = fake_urlopen
+        try:
+            report = main.call_deepseek_grading_report(
+                {
+                    "submission_id": 1,
+                    "student_id": "2024001",
+                    "assignment_id": "home_ai_report",
+                    "assignment_title": "AI Report",
+                    "assignment_description": "Solve the task.",
+                    "score": 95,
+                    "comment": "Good solution.",
+                    "status": "graded",
+                },
+                "def solve():\n    return 42\n",
+                "## spec.md\n- Return integer 42.",
+                api_key="test-key",
+            )
+        finally:
+            main.urllib.request.urlopen = original_urlopen
+
+        body = captured["body"]
+        user_payload = json.loads(body["messages"][1]["content"])
+        self.assertIn("Return integer 42", user_payload["assignment_requirements"])
+        self.assertEqual(report["schema_version"], main.AI_GRADING_REPORT_SCHEMA_VERSION)
+        self.assertEqual(report["requirement_checks"][0]["status"], "met")
+        self.assertIn("Requirement Checks:", report["report_text"])
 
     def test_peer_review_stage_and_auto_tasks_gate_reviews(self) -> None:
         conn = main.get_conn()

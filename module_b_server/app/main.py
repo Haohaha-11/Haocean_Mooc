@@ -117,6 +117,32 @@ def now_str() -> str:
     return datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def parse_deadline(deadline: str) -> datetime | None:
+    value = deadline.strip()
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(value, fmt)
+            if fmt == "%Y-%m-%d":
+                parsed = parsed.replace(hour=23, minute=59, second=59)
+            return parsed.replace(tzinfo=BEIJING_TZ)
+        except ValueError:
+            continue
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=BEIJING_TZ)
+    return parsed.astimezone(BEIJING_TZ)
+
+
+def deadline_has_passed(deadline: str) -> bool:
+    parsed = parse_deadline(deadline)
+    return bool(parsed and datetime.now(BEIJING_TZ) > parsed)
+
+
 def safe_name(name: str) -> str:
     """
     只保留文件名本身，防止 ../ 这类路径穿越。
@@ -1559,7 +1585,7 @@ async def create_submission(
     conn = get_conn()
     assignment = conn.execute(
         """
-        SELECT assignment_id, status, class_id
+        SELECT assignment_id, status, class_id, deadline
         FROM assignments
         WHERE assignment_id = ?;
         """,
@@ -1583,6 +1609,16 @@ async def create_submission(
             detail={
                 "code": 400,
                 "message": "assignment is not open",
+            },
+        )
+
+    if deadline_has_passed(str(assignment["deadline"] or "")):
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": 400,
+                "message": "assignment deadline has passed",
             },
         )
 
@@ -1627,25 +1663,70 @@ async def create_submission(
     final_file = student_dir / f"{timestamp}_{upload_file_name}"
     shutil.move(str(tmp_file), str(final_file))
 
-    cur = conn.execute(
+    submit_time = now_str()
+    existing = conn.execute(
         """
-        INSERT INTO submissions (
-            student_id, assignment_id, file_name, file_path,
-            md5, submit_time, status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?);
+        SELECT submission_id, file_path
+        FROM submissions
+        WHERE student_id = ?
+          AND assignment_id = ?
+        ORDER BY submission_id DESC
+        LIMIT 1;
         """,
-        (
-            student_id,
-            p.assignment_id,
-            upload_file_name,
-            str(final_file),
-            actual_md5,
-            now_str(),
-            "pending",
-        ),
-    )
-    submission_id = cur.lastrowid
+        (student_id, p.assignment_id),
+    ).fetchone()
+
+    if existing is not None:
+        submission_id = int(existing["submission_id"])
+        old_file_path = Path(str(existing["file_path"]))
+        conn.execute(
+            """
+            UPDATE submissions
+            SET file_name = ?,
+                file_path = ?,
+                md5 = ?,
+                submit_time = ?,
+                status = 'pending',
+                score = NULL,
+                comment = NULL,
+                feedback_path = NULL,
+                peer_avg_score = NULL,
+                final_score = NULL,
+                peer_bonus = 0
+            WHERE submission_id = ?;
+            """,
+            (
+                upload_file_name,
+                str(final_file),
+                actual_md5,
+                submit_time,
+                submission_id,
+            ),
+        )
+        if old_file_path != final_file:
+            old_file_path.unlink(missing_ok=True)
+        conn.execute("DELETE FROM ai_grading_reports WHERE submission_id = ?;", (submission_id,))
+    else:
+        cur = conn.execute(
+            """
+            INSERT INTO submissions (
+                student_id, assignment_id, file_name, file_path,
+                md5, submit_time, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                student_id,
+                p.assignment_id,
+                upload_file_name,
+                str(final_file),
+                actual_md5,
+                submit_time,
+                "pending",
+            ),
+        )
+        submission_id = int(cur.lastrowid)
+
     calculate_plagiarism_for_submission(conn, int(submission_id))
     conn.commit()
     conn.close()
@@ -4045,6 +4126,8 @@ class PlagiarismCheckRequest(BaseModel):
 
 
 PLAGIARISM_METHODS = {"token", "hybrid", "ai"}
+AI_GRADING_REPORT_SCHEMA_VERSION = 2
+MAX_AI_REQUIREMENTS_TEXT_BYTES = 24_000
 
 
 def clamp_similarity(value: object) -> float:
@@ -4177,15 +4260,157 @@ def call_deepseek_plagiarism_judge(
     }
 
 
+def _material_member_name(name: str) -> str:
+    return str(PurePosixPath(name)).lstrip("/")
+
+
+def _append_limited_text(
+    collected: list[str],
+    label: str,
+    raw: bytes,
+    remaining: int,
+) -> int:
+    if remaining <= 0:
+        return 0
+    chunk = raw[:remaining]
+    text = chunk.decode("utf-8", errors="ignore").strip()
+    if text:
+        collected.append(f"## {label}\n{text}")
+    return remaining - len(chunk)
+
+
+def read_text_from_assignment_materials(file_path: str) -> str:
+    """
+    Read assignment requirement text from uploaded materials.
+
+    This deliberately avoids extracting files to disk. It supports plain text,
+    zip packages, and tar packages, and only includes text-like files.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return ""
+
+    collected: list[str] = []
+    remaining = MAX_AI_REQUIREMENTS_TEXT_BYTES
+
+    try:
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path, "r") as zf:
+                for item in zf.infolist():
+                    if remaining <= 0:
+                        break
+                    if item.is_dir():
+                        continue
+                    name = _material_member_name(item.filename)
+                    suffix = Path(name).suffix.lower()
+                    if suffix and suffix not in TEXT_EXTENSIONS:
+                        continue
+                    with zf.open(item, "r") as f:
+                        raw = f.read(remaining)
+                    remaining = _append_limited_text(collected, name, raw, remaining)
+        elif tarfile.is_tarfile(path):
+            with tarfile.open(path, "r:*") as tar:
+                for member in tar.getmembers():
+                    if remaining <= 0:
+                        break
+                    if not member.isfile():
+                        continue
+                    name = _material_member_name(member.name)
+                    suffix = Path(name).suffix.lower()
+                    if suffix and suffix not in TEXT_EXTENSIONS:
+                        continue
+                    extracted = tar.extractfile(member)
+                    if extracted is None:
+                        continue
+                    raw = extracted.read(min(member.size, remaining))
+                    remaining = _append_limited_text(collected, name, raw, remaining)
+        else:
+            suffix = path.suffix.lower()
+            if not suffix or suffix in TEXT_EXTENSIONS:
+                remaining = _append_limited_text(
+                    collected,
+                    path.name,
+                    path.read_bytes(),
+                    remaining,
+                )
+    except Exception as exc:
+        collected.append(f"[MATERIALS_READ_ERROR] {exc}")
+
+    return "\n\n".join(collected).strip()
+
+
+def assignment_requirements_text(conn, row) -> str:
+    parts: list[str] = []
+    description = str(row["assignment_description"] or "").strip()
+    if description:
+        parts.append(f"## 作业描述\n{description}")
+
+    material_row = conn.execute(
+        """
+        SELECT file_name, file_path
+        FROM assignment_materials
+        WHERE assignment_id = ?;
+        """,
+        (row["assignment_id"],),
+    ).fetchone()
+    if material_row is not None:
+        material_text = read_text_from_assignment_materials(material_row["file_path"])
+        if material_text:
+            parts.append(f"## 作业资料：{material_row['file_name']}\n{material_text}")
+
+    return "\n\n".join(parts).strip()[:MAX_AI_REQUIREMENTS_TEXT_BYTES]
+
+
+def _requirement_checks(report: dict[str, object]) -> list[dict[str, str]]:
+    raw_checks = report.get("requirement_checks") or []
+    if not isinstance(raw_checks, list):
+        return []
+    checks: list[dict[str, str]] = []
+    for item in raw_checks[:6]:
+        if not isinstance(item, dict):
+            continue
+        requirement = str(item.get("requirement") or "").strip()
+        status = str(item.get("status") or "").strip()
+        evidence = str(item.get("evidence") or "").strip()
+        suggestion = str(item.get("suggestion") or "").strip()
+        if requirement or evidence or suggestion:
+            checks.append(
+                {
+                    "requirement": requirement,
+                    "status": status,
+                    "evidence": evidence,
+                    "suggestion": suggestion,
+                }
+            )
+    return checks
+
+
 def format_ai_grading_report(report: dict[str, object]) -> str:
     strengths = report.get("strengths") or []
     concerns = report.get("concerns") or []
     suggestions = report.get("suggestions") or []
+    requirement_checks = _requirement_checks(report)
     lines = [
         str(report.get("summary") or "No summary available."),
         "",
-        "Strengths:",
+        "Requirement Checks:",
     ]
+    if requirement_checks:
+        for item in requirement_checks:
+            requirement = item["requirement"] or "Unspecified requirement"
+            status = item["status"] or "unclear"
+            evidence = item["evidence"] or "No concrete evidence cited."
+            suggestion = item["suggestion"]
+            lines.append(f"- [{status}] {requirement}")
+            lines.append(f"  Evidence: {evidence}")
+            if suggestion:
+                lines.append(f"  Suggestion: {suggestion}")
+    else:
+        lines.append("- No requirement-level checks were returned.")
+    lines.extend([
+        "",
+        "Strengths:",
+    ])
     lines.extend(f"- {item}" for item in strengths if str(item).strip())
     lines.append("")
     lines.append("Concerns:")
@@ -4228,18 +4453,38 @@ def local_ai_grading_report(row, excerpt: str) -> dict[str, object]:
         suggestions.append("Review the teacher comment and address the highlighted issues.")
     else:
         suggestions.append("Add concrete teacher feedback during grading for a stronger report.")
+    requirement_text = (
+        str(row["assignment_requirements"] or "").strip()
+        if "assignment_requirements" in row.keys()
+        else ""
+    )
+    requirement_checks = []
+    if requirement_text:
+        first_line = next((line.strip("- #\t ") for line in requirement_text.splitlines() if line.strip()), "")
+        requirement_checks.append(
+            {
+                "requirement": first_line or "Review assignment requirements.",
+                "status": "unclear",
+                "evidence": "Local fallback cannot semantically compare the submission against requirements.",
+                "suggestion": "Configure a teacher DeepSeek key for requirement-level AI review.",
+            }
+        )
+
     report = {
+        "schema_version": AI_GRADING_REPORT_SCHEMA_VERSION,
         "summary": summary,
+        "requirement_checks": requirement_checks,
         "strengths": strengths,
         "concerns": concerns,
         "suggestions": suggestions,
         "score_rationale": f"Current status is {status}; teacher score is {score}.",
+        "requirements_excerpt": requirement_text[:2000],
     }
     report["report_text"] = format_ai_grading_report(report)
     return report
 
 
-def call_deepseek_grading_report(row, excerpt: str, api_key: str = "") -> dict[str, object]:
+def call_deepseek_grading_report(row, excerpt: str, requirements: str, api_key: str = "") -> dict[str, object]:
     effective_api_key = resolve_deepseek_api_key(api_key)
     if not effective_api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is not configured")
@@ -4251,10 +4496,14 @@ def call_deepseek_grading_report(row, excerpt: str, api_key: str = "") -> dict[s
                 "role": "system",
                 "content": (
                     "You are a rigorous university assignment grading assistant. "
-                    "Review the submitted content and teacher feedback. Return JSON only with keys: "
-                    "summary (short Chinese sentence), strengths (array of up to 3 short Chinese strings), "
+                    "Review the submitted content against the assignment requirements and teacher feedback. "
+                    "Be concrete: cite exact evidence from the submission, and say when evidence is missing. "
+                    "Do not reward requirements that are not demonstrated. "
+                    "Return JSON only with keys: schema_version (number), summary (short Chinese sentence), "
+                    "requirement_checks (array of up to 6 objects with requirement, status, evidence, suggestion; "
+                    "status must be met, partial, missing, or unclear), strengths (array of up to 3 short Chinese strings), "
                     "concerns (array of up to 3 short Chinese strings), suggestions (array of up to 3 short Chinese strings), "
-                    "score_rationale (short Chinese sentence). Do not invent files that are not in the excerpt."
+                    "score_rationale (short Chinese sentence). Do not invent files, comments, tests, or behavior that are not in the excerpts."
                 ),
             },
             {
@@ -4266,6 +4515,7 @@ def call_deepseek_grading_report(row, excerpt: str, api_key: str = "") -> dict[s
                         "assignment_id": row["assignment_id"],
                         "assignment_title": row["assignment_title"],
                         "assignment_description": row["assignment_description"],
+                        "assignment_requirements": requirements,
                         "teacher_score": row["score"],
                         "teacher_comment": row["comment"],
                         "status": row["status"],
@@ -4309,7 +4559,9 @@ def call_deepseek_grading_report(row, excerpt: str, api_key: str = "") -> dict[s
 
     parsed = parse_model_json(str(content))
     report = {
+        "schema_version": AI_GRADING_REPORT_SCHEMA_VERSION,
         "summary": str(parsed.get("summary", "")).strip(),
+        "requirement_checks": _requirement_checks(parsed),
         "strengths": [str(item).strip() for item in parsed.get("strengths", [])[:3] if str(item).strip()]
         if isinstance(parsed.get("strengths", []), list) else [],
         "concerns": [str(item).strip() for item in parsed.get("concerns", [])[:3] if str(item).strip()]
@@ -4317,6 +4569,7 @@ def call_deepseek_grading_report(row, excerpt: str, api_key: str = "") -> dict[s
         "suggestions": [str(item).strip() for item in parsed.get("suggestions", [])[:3] if str(item).strip()]
         if isinstance(parsed.get("suggestions", []), list) else [],
         "score_rationale": str(parsed.get("score_rationale", "")).strip(),
+        "requirements_excerpt": requirements[:2000],
     }
     report["report_text"] = format_ai_grading_report(report)
     return report
@@ -4378,9 +4631,10 @@ def get_submission_ai_grade_report(
             (submission_id,),
         ).fetchone()
     if cached is not None:
-        if not effective_deepseek_api_key or cached["source"] == "deepseek":
+        report = json.loads(cached["report_json"])
+        is_current_schema = report.get("schema_version") == AI_GRADING_REPORT_SCHEMA_VERSION
+        if is_current_schema and (not effective_deepseek_api_key or cached["source"] == "deepseek"):
             conn.close()
-            report = json.loads(cached["report_json"])
             return {
                 "code": 200,
                 "message": "ai grading report returned",
@@ -4391,19 +4645,27 @@ def get_submission_ai_grade_report(
             }
 
     excerpt = trim_text_for_ai(read_text_from_submission_package(row["file_path"]))
+    requirements = assignment_requirements_text(conn, row)
+    report_row = dict(row)
+    report_row["assignment_requirements"] = requirements
     generated_at = now_str()
     source = "deepseek" if effective_deepseek_api_key else "local"
     model = DEEPSEEK_MODEL if effective_deepseek_api_key else "local-summary"
     try:
         report = (
-            call_deepseek_grading_report(row, excerpt, api_key=effective_deepseek_api_key)
+            call_deepseek_grading_report(
+                report_row,
+                excerpt,
+                requirements,
+                api_key=effective_deepseek_api_key,
+            )
             if effective_deepseek_api_key
-            else local_ai_grading_report(row, excerpt)
+            else local_ai_grading_report(report_row, excerpt)
         )
     except Exception as exc:
         source = "local"
         model = "local-summary"
-        report = local_ai_grading_report(row, excerpt)
+        report = local_ai_grading_report(report_row, excerpt)
         report["ai_error"] = str(exc)
         report["report_text"] = format_ai_grading_report(report)
     report["submission_excerpt"] = excerpt[:2000]

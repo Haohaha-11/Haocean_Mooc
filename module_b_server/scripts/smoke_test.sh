@@ -10,6 +10,7 @@ TEACHER_EMAIL="${SMOKE_TEACHER_EMAIL:-teacher@example.com}"
 STUDENT_TOKEN="${SMOKE_STUDENT_TOKEN:-}"
 TEACHER_TOKEN="${SMOKE_TEACHER_TOKEN:-}"
 ASSIGNMENT_ID="home_smoke_$(date +%s)"
+SMOKE_DEADLINE="${SMOKE_DEADLINE:-2099-12-31 23:59:59}"
 WORK_DIR="/tmp/module_b_smoke_test"
 PACKAGE_PATH="${WORK_DIR}/${STUDENT_ID}_${ASSIGNMENT_ID}.tar.gz"
 HEALTH_RESPONSE=""
@@ -124,7 +125,7 @@ if [[ -n "${TEACHER_TOKEN}" ]]; then
         \"assignment_id\": \"${ASSIGNMENT_ID}\",
         \"title\": \"Smoke Test Assignment\",
         \"description\": \"This assignment is created by smoke_test.sh\",
-        \"deadline\": \"2026-06-01 23:59:59\"
+        \"deadline\": \"${SMOKE_DEADLINE}\"
       }
     }"
 else
@@ -138,7 +139,7 @@ else
         \"assignment_id\": \"${ASSIGNMENT_ID}\",
         \"title\": \"Smoke Test Assignment\",
         \"description\": \"This assignment is created by smoke_test.sh\",
-        \"deadline\": \"2026-06-01 23:59:59\"
+        \"deadline\": \"${SMOKE_DEADLINE}\"
       }
     }"
 fi

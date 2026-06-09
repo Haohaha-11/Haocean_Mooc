@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,13 +21,19 @@ class ClassesAndDownloadTests(unittest.TestCase):
         self.original_auth_required = main.AUTH_REQUIRED
         self.original_tmp_dir = main.TMP_DIR
         self.original_materials_dir = main.ASSIGNMENT_MATERIALS_DIR
+        self.original_submissions_dir = main.SUBMISSIONS_DIR
+        self.original_feedback_dir = main.FEEDBACK_DIR
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         main.DB_PATH = self.root / "engine.db"
         main.TMP_DIR = self.root / "tmp"
         main.ASSIGNMENT_MATERIALS_DIR = self.root / "assignment_materials"
+        main.SUBMISSIONS_DIR = self.root / "submissions"
+        main.FEEDBACK_DIR = self.root / "feedback"
         main.TMP_DIR.mkdir(parents=True, exist_ok=True)
         main.ASSIGNMENT_MATERIALS_DIR.mkdir(parents=True, exist_ok=True)
+        main.SUBMISSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        main.FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
         main.AUTH_REQUIRED = True
         main.init_db()
         main.init_extra_db()
@@ -35,7 +43,35 @@ class ClassesAndDownloadTests(unittest.TestCase):
         main.AUTH_REQUIRED = self.original_auth_required
         main.TMP_DIR = self.original_tmp_dir
         main.ASSIGNMENT_MATERIALS_DIR = self.original_materials_dir
+        main.SUBMISSIONS_DIR = self.original_submissions_dir
+        main.FEEDBACK_DIR = self.original_feedback_dir
         self.tmp.cleanup()
+
+    def _upload_submission(self, student_id: str, assignment_id: str, content: bytes) -> dict:
+        metadata = {
+            "action": "SUBMIT",
+            "timestamp": 1,
+            "payload": {
+                "student_id": student_id,
+                "assignment_id": assignment_id,
+                "md5": hashlib.md5(content).hexdigest(),
+                "file_name": "answer.tar.gz",
+            },
+        }
+        return asyncio.run(
+            main.create_submission(
+                metadata=json.dumps(metadata),
+                file=UploadFile(
+                    filename="answer.tar.gz",
+                    file=io.BytesIO(content),
+                ),
+                auth=main.AuthContext(
+                    email=f"{student_id.lower()}@example.com",
+                    role=main.ROLE_STUDENT,
+                    display_id=student_id,
+                ),
+            )
+        )["payload"]
 
     def test_student_sees_class_assignment_after_joining(self) -> None:
         teacher = main.AuthContext(
@@ -305,6 +341,78 @@ class ClassesAndDownloadTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as caught:
             main.download_assignment_materials("home_materials", auth=outsider)
         self.assertEqual(caught.exception.status_code, 403)
+
+    def test_student_resubmission_overwrites_latest_submission_row(self) -> None:
+        conn = main.get_conn()
+        conn.execute(
+            """
+            INSERT INTO assignments (
+                assignment_id, title, description, deadline, created_by, created_at, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("home_overwrite", "Overwrite", "", "2999-01-01 23:59:59", "T001", main.now_str(), "open"),
+        )
+        conn.commit()
+        conn.close()
+
+        first = self._upload_submission("2024001", "home_overwrite", b"first submission")
+
+        conn = main.get_conn()
+        conn.execute(
+            """
+            UPDATE submissions
+            SET status = 'graded', score = 88, comment = 'old', feedback_path = 'old.md'
+            WHERE submission_id = ?;
+            """,
+            (first["submission_id"],),
+        )
+        conn.commit()
+        conn.close()
+
+        second = self._upload_submission("2024001", "home_overwrite", b"second submission")
+
+        self.assertEqual(second["submission_id"], first["submission_id"])
+
+        conn = main.get_conn()
+        rows = conn.execute(
+            """
+            SELECT submission_id, md5, status, score, comment, feedback_path
+            FROM submissions
+            WHERE student_id = ?
+              AND assignment_id = ?;
+            """,
+            ("2024001", "home_overwrite"),
+        ).fetchall()
+        conn.close()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "pending")
+        self.assertIsNone(rows[0]["score"])
+        self.assertIsNone(rows[0]["comment"])
+        self.assertIsNone(rows[0]["feedback_path"])
+        self.assertEqual(rows[0]["md5"], hashlib.md5(b"second submission").hexdigest())
+        self.assertEqual(Path(second["archive_path"]).read_bytes(), b"second submission")
+
+    def test_submission_after_deadline_is_rejected(self) -> None:
+        conn = main.get_conn()
+        conn.execute(
+            """
+            INSERT INTO assignments (
+                assignment_id, title, description, deadline, created_by, created_at, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("home_closed", "Closed", "", "2000-01-01 00:00:00", "T001", main.now_str(), "open"),
+        )
+        conn.commit()
+        conn.close()
+
+        with self.assertRaises(HTTPException) as caught:
+            self._upload_submission("2024001", "home_closed", b"late submission")
+
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(caught.exception.detail["message"], "assignment deadline has passed")
 
 
 if __name__ == "__main__":
