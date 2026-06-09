@@ -142,11 +142,32 @@ haocean-student list
 - 作业编号，例如 `home_001`。
 - 作业标题。
 - 所属班级。
+- 是否有作业资料包。
 - 截止时间。
 
 提交作业时需要使用作业编号。
 
-## 6. 准备作业文件
+## 6. 下载作业资料
+
+如果 `haocean-student list` 显示 `materials=yes`，可以先下载老师发布的作业说明文件和附件：
+
+```bash
+haocean-student materials home_001
+```
+
+资料默认保存到：
+
+```text
+~/.haocean/workspace/home_001/materials/
+```
+
+如果资料包是 zip，学生端会自动解压。只想保存原始资料包时：
+
+```bash
+haocean-student materials home_001 --no-extract
+```
+
+## 7. 准备作业文件
 
 学生端默认工作区是：
 
@@ -174,7 +195,7 @@ nano ~/.haocean/workspace/home_001/answer.py
 └── README.md
 ```
 
-## 7. 预览提交内容
+## 8. 预览提交内容
 
 提交前建议先预览：
 
@@ -216,7 +237,7 @@ node_modules/
 haocean-student submit home_001 --allow-zip
 ```
 
-## 8. 提交作业
+## 9. 提交作业
 
 ```bash
 haocean-student submit home_001
@@ -233,7 +254,7 @@ haocean-student submit home_001
 
 提交成功后，服务端状态会变成 `pending`，等待老师批改。
 
-## 9. 自动监控提交
+## 10. 自动监控提交
 
 如果希望学生端持续监控工作区：
 
@@ -249,7 +270,7 @@ haocean-student watch
 nohup haocean-student watch > ~/.haocean/watch.log 2>&1 &
 ```
 
-## 10. 拉取老师反馈
+## 11. 拉取老师反馈
 
 ```bash
 haocean-student feedback
@@ -270,7 +291,7 @@ haocean-student feedback
 - 分数。
 - 老师评语。
 
-## 11. 互评
+## 12. 互评
 
 如果课程开启互评，老师进入互评阶段并分配任务后，先查看自己的互评任务：
 
@@ -289,7 +310,7 @@ haocean-student peer-review 21 95 --comment "完成较好，结构清晰"
 - `21` 是被互评的提交编号。
 - `95` 是你的互评分数。
 
-## 12. 常见问题
+## 13. 常见问题
 
 ### 命令找不到
 

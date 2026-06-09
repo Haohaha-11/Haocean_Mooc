@@ -162,12 +162,14 @@ Assignment ID
 Title
 Class ID [当前选中班级]
 Description
+Materials Path
 Deadline
 Course Weight
 Peer Review
 ```
 
 有默认班级和默认权重时，直接回车确认；输入 `q` 可以重新选择或填写。`Course Weight` 是课程总评相对权重，默认 `1`。`Peer Review` 用于在发布阶段决定该作业是否开启互评。
+`Materials Path` 可留空；也可以填一个作业说明文件、PDF、ZIP 或附件目录。目录会在老师端自动打包成 zip 后上传。
 
 `Deadline` 按北京时间解析。支持 `6.10`、`6.10 18:30`、`2026-06-10`、`2026-06-10 18:30`；只写日期时默认截止到当天 `23:59:59`。
 
@@ -179,6 +181,13 @@ haocean-teacher publish home_001 "Homework 1" --weight 2 --peer-review --teacher
 
 `peer_weight` 默认自动等于 `1 - teacher_weight`。例如 `--teacher-weight 0.6` 时，学生互评权重自动为 `0.4`。`--peer-weight` 只作为高级覆盖参数保留。
 
+如果需要随作业发布说明文件或附件：
+
+```bash
+haocean-teacher publish home_001 "Homework 1" --materials ./home_001_spec.pdf
+haocean-teacher publish home_002 "Homework 2" --materials ./home_002_materials/
+```
+
 兼容旧命令：
 
 给指定班级发布作业：
@@ -188,6 +197,7 @@ haocean-teacher assignment create home_001 "Homework 1" \
   --class-id cs101 \
   --description "完成第一次作业" \
   --deadline "2026-06-15 23:59:59" \
+  --materials ./home_001_spec.pdf \
   --weight 2 \
   --peer-review
 ```
