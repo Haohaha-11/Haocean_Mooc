@@ -5,6 +5,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -26,6 +27,12 @@ class Assignment:
     class_name: str | None = None
     course_title: str | None = None
     assignment_weight: float = 1.0
+    has_materials: bool = False
+    materials_file_name: str | None = None
+    materials_file_size: int | None = None
+    materials_md5: str | None = None
+    materials_uploaded_at: str | None = None
+    materials_download_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +159,24 @@ class ModuleBClient:
         response = self._request("GET", "/v1/assignments/open")
         payload = self._payload(response)
         return [Assignment(**item) for item in payload.get("assignments", [])]
+
+    def get_assignment_materials(self, assignment_id: str) -> dict[str, Any]:
+        response = self._request("GET", f"/v1/assignments/{quote(assignment_id)}/materials")
+        return self._payload(response)
+
+    def download_assignment_materials(self, assignment_id: str, target_dir: Path) -> Path:
+        materials_payload = self.get_assignment_materials(assignment_id)
+        materials = materials_payload.get("materials")
+        if not isinstance(materials, dict):
+            raise ModuleAApiError("assignment materials do not exist")
+        file_name = str(materials.get("file_name") or f"{assignment_id}_materials")
+        response = self._request("GET", f"/v1/assignments/{quote(assignment_id)}/materials/download")
+        if response.status_code >= 400:
+            self._payload(response)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / Path(file_name).name
+        target_path.write_bytes(response.content)
+        return target_path
 
     def join_class(self, student_id: str, join_code: str) -> ClassInfo:
         response = self._request(

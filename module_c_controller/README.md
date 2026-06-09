@@ -72,6 +72,12 @@ haocean-teacher select
 haocean-teacher publish
 ```
 
+查看自己已发布的开放作业：
+
+```bash
+haocean-teacher assignment list
+```
+
 需要互评的作业应在发布时开启：
 
 ```bash

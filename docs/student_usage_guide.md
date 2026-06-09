@@ -63,7 +63,7 @@ source ~/.bashrc
 haocean ai-help "怎么提交作业？"
 ```
 
-也可以使用 `HAOCEAN_DEEPSEEK_API_KEY`。这只影响本机帮助命令，不影响提交作业；老师端 AI 查重和 AI 审阅报告使用的是服务器上的 Module B key。
+也可以使用 `HAOCEAN_DEEPSEEK_API_KEY`。这只影响本机帮助命令，不影响提交作业；老师端 AI 查重和 AI 审阅报告使用老师端本机 key 或服务器 Module B key，不读取学生机器上的 key。
 
 ## 3. 首次配置和登录
 

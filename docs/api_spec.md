@@ -702,7 +702,7 @@ GET /v1/submissions/{submission_id}/plagiarism
 GET /v1/submissions/{submission_id}/ai-grade-report
 ```
 
-服务端读取 `DEEPSEEK_API_KEY` 或 `MODULE_B_DEEPSEEK_API_KEY`。未配置时返回本地结构化报告；配置后会调用 DeepSeek 并缓存结果。重新批改提交会清除该提交的缓存报告。
+教师端可以通过请求头 `X-DeepSeek-API-Key` 提供老师自己的 DeepSeek key；如果没有该请求头，服务端读取 `DEEPSEEK_API_KEY` 或 `MODULE_B_DEEPSEEK_API_KEY`。未配置时返回本地结构化报告；配置后会调用 DeepSeek 并缓存结果。重新批改提交会清除该提交的缓存报告。
 
 查询某个作业的成绩统计：
 
@@ -859,11 +859,14 @@ unzip -l course_archive.zip
 
 本地预筛会先对文本进行规范化处理，过滤数字、下划线和标点，只保留中文和英文 token，再计算相似度，避免因为数字或下划线相同导致误判。`hybrid` / `ai` 会把预筛后的候选对及其 `scope`、作业编号、提交编号发给 DeepSeek 复核。
 
+教师端可以通过请求头 `X-DeepSeek-API-Key` 提供老师自己的 DeepSeek key；如果没有该请求头，服务端读取 `DEEPSEEK_API_KEY` 或 `MODULE_B_DEEPSEEK_API_KEY`。
+
 ### 请求示例
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/plagiarism/check \
   -H "Content-Type: application/json" \
+  -H "X-DeepSeek-API-Key: your-deepseek-key" \
   -d '{
     "action": "CHECK_PLAGIARISM",
     "timestamp": 1710000000,

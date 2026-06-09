@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_URL="${HAOCEAN_REPO_URL:-https://github.com/Haohaha-11/Haocean_Mooc.git}"
+REF="${HAOCEAN_VERSION:-main}"
+RAW_BASE="${HAOCEAN_RAW_BASE:-https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/${REF}}"
+BIN_DIR="${HAOCEAN_BIN_DIR:-$HOME/.local/bin}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
+run_installer() {
+  local script_name="$1"
+  if [ -f "$SCRIPT_DIR/$script_name" ]; then
+    HAOCEAN_REPO_URL="$REPO_URL" HAOCEAN_VERSION="$REF" HAOCEAN_BIN_DIR="$BIN_DIR" \
+      bash "$SCRIPT_DIR/$script_name"
+    return
+  fi
+
+  curl -fsSL "$RAW_BASE/$script_name" | \
+    HAOCEAN_REPO_URL="$REPO_URL" HAOCEAN_VERSION="$REF" HAOCEAN_BIN_DIR="$BIN_DIR" bash
+}
+
+run_installer install-student.sh
+run_installer install-teacher.sh
+
+echo
+echo "Haocean CLI tools installed."
+echo "Student : $BIN_DIR/haocean-student"
+echo "Teacher : $BIN_DIR/haocean-teacher"
+echo "AI help : $BIN_DIR/haocean ai-help"
+echo
+echo "Add this to your shell profile if commands are not found:"
+echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+echo
+echo "Uninstall old local CLI install:"
+echo "  curl -fsSL $RAW_BASE/uninstall.sh | bash"

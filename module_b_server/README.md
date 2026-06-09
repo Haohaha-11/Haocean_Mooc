@@ -277,7 +277,7 @@ unzip -l /tmp/downloaded_course_archive.zip | head -50
 8. `token` 模式下，相似度超过阈值则记录为疑似重复；
 9. `hybrid` / `ai` 模式下，只把本地预筛命中的候选对发给 DeepSeek，返回 AI 相似度、判断理由和证据点。
 
-DeepSeek 配置放在运行 Module B 的服务器上，不放在老师或学生电脑上。仓库运行方式下可以写入 `module_b_server/.env`，或者写入 systemd/Docker/云平台的服务进程环境变量：
+DeepSeek 可以由老师端随请求提供，也可以由运行 Module B 的服务器统一配置。老师端会通过 `X-DeepSeek-API-Key` 请求头传入自己的 key；如果请求头没有 key，Module B 会读取服务器环境变量。仓库运行方式下可以写入 `module_b_server/.env`，或者写入 systemd/Docker/云平台的服务进程环境变量：
 
 ```env
 MODULE_B_DEEPSEEK_API_KEY=your-deepseek-key

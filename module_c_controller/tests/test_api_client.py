@@ -190,6 +190,28 @@ def test_auth_token_is_sent_as_bearer_header() -> None:
     assert headers["Authorization"] == "Bearer token-abc"
 
 
+def test_teacher_deepseek_key_is_sent_as_header(monkeypatch) -> None:
+    monkeypatch.setenv("MODULE_C_DEEPSEEK_API_KEY", "teacher-key")
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "code": 200,
+                    "message": "pending submissions returned",
+                    "payload": {"submissions": []},
+                },
+            )
+        ]
+    )
+    repo = ModuleBRepository("http://server", "T001", session=session)  # type: ignore[arg-type]
+
+    repo.list_submissions("pending")
+
+    headers = session.calls[0]["kwargs"]["headers"]  # type: ignore[index]
+    assert headers["X-DeepSeek-API-Key"] == "teacher-key"
+
+
 def test_approved_submissions_are_loaded_from_module_b() -> None:
     session = FakeSession(
         [
@@ -270,6 +292,39 @@ def test_create_class_sends_teacher_payload() -> None:
     payload = call["kwargs"]["json"]["payload"]  # type: ignore[index]
     assert payload["teacher_id"] == "T001"
     assert payload["join_code"] == "JOIN101"
+
+def test_list_assignments_uses_open_assignments_endpoint() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "code": 200,
+                    "message": "open assignments returned",
+                    "payload": {
+                        "assignments": [
+                            {
+                                "assignment_id": "home_001",
+                                "title": "Homework 1",
+                                "class_name": "CS101 Spring",
+                                "assignment_weight": 1.0,
+                                "deadline": "2026-06-15 23:59:59",
+                                "created_at": "2026-06-01 10:00:00",
+                                "status": "open",
+                            }
+                        ]
+                    },
+                },
+            )
+        ]
+    )
+    repo = ModuleBRepository("http://server", "T001", session=session)  # type: ignore[arg-type]
+
+    assignments = repo.list_assignments()
+
+    assert assignments[0]["assignment_id"] == "home_001"
+    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["url"] == "http://server/v1/assignments/open"
 
 
 def test_create_assignment_sends_assignment_weight() -> None:
@@ -527,3 +582,34 @@ def test_list_assignment_submissions_filters_by_assignment() -> None:
     assert session.calls[0]["url"] == "http://server/v1/submissions"
     assert session.calls[0]["kwargs"]["params"] == {"status": "all", "assignment_id": "home_001"}
     assert session.calls[1]["kwargs"]["params"] == {"status": "pending", "assignment_id": "home_001"}
+
+
+def test_upload_assignment_materials_posts_multipart_file(tmp_path) -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                {
+                    "code": 200,
+                    "message": "assignment materials uploaded",
+                    "payload": {
+                        "assignment_id": "home_001",
+                        "file_name": "spec.pdf",
+                        "file_size": 7,
+                    },
+                },
+            )
+        ]
+    )
+    repo = ModuleBRepository("http://server", "T001", session=session)  # type: ignore[arg-type]
+    source = tmp_path / "spec.pdf"
+    source.write_bytes(b"payload")
+
+    payload = repo.upload_assignment_materials("home_001", source)
+
+    assert payload["file_name"] == "spec.pdf"
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "http://server/v1/assignments/home_001/materials"
+    files = call["kwargs"]["files"]  # type: ignore[index]
+    assert files["file"][0] == "spec.pdf"

@@ -282,7 +282,7 @@ haocean-teacher archive download course_archive.zip
 - 反馈：`GET /v1/feedback/{student_id}`
 - 互评：`POST /v1/assignments/peer-review/config`、`POST /v1/assignments/{assignment_id}/peer-review/stage`、`POST /v1/assignments/{assignment_id}/peer-review/tasks/auto`、`GET /v1/peer-review/tasks/my`、`POST /v1/peer-reviews`
 - 成绩：`POST /v1/assignments/{assignment_id}/calculate-final-scores`、`GET /v1/assignments/{assignment_id}/final-scores`、`GET /v1/assignments/{assignment_id}/score-stats`、`GET /v1/students/{student_id}/score-history`
-- AI 报告：`GET /v1/submissions/{submission_id}/ai-grade-report`，读取 `DEEPSEEK_API_KEY` / `MODULE_B_DEEPSEEK_API_KEY`，未配置时返回本地结构化报告
+- AI 报告：`GET /v1/submissions/{submission_id}/ai-grade-report`，支持老师端 `X-DeepSeek-API-Key` 或服务端 `DEEPSEEK_API_KEY` / `MODULE_B_DEEPSEEK_API_KEY`，未配置时返回本地结构化报告
 - 查重：`GET /v1/assignments/{assignment_id}/plagiarism`、`GET /v1/submissions/{submission_id}/plagiarism`、`POST /v1/plagiarism/check`、`GET /v1/plagiarism/reports/{assignment_id}`
 - 归档：`POST /v1/archives/course`、`GET /v1/archives`、`GET /v1/archives/download/{archive_name}`
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import io
 from pathlib import Path
 import tempfile
 import unittest
 
 from fastapi import HTTPException
+from fastapi import UploadFile
 from fastapi.responses import FileResponse
 
 from app import main
@@ -14,9 +17,15 @@ class ClassesAndDownloadTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_db_path = main.DB_PATH
         self.original_auth_required = main.AUTH_REQUIRED
+        self.original_tmp_dir = main.TMP_DIR
+        self.original_materials_dir = main.ASSIGNMENT_MATERIALS_DIR
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         main.DB_PATH = self.root / "engine.db"
+        main.TMP_DIR = self.root / "tmp"
+        main.ASSIGNMENT_MATERIALS_DIR = self.root / "assignment_materials"
+        main.TMP_DIR.mkdir(parents=True, exist_ok=True)
+        main.ASSIGNMENT_MATERIALS_DIR.mkdir(parents=True, exist_ok=True)
         main.AUTH_REQUIRED = True
         main.init_db()
         main.init_extra_db()
@@ -24,6 +33,8 @@ class ClassesAndDownloadTests(unittest.TestCase):
     def tearDown(self) -> None:
         main.DB_PATH = self.original_db_path
         main.AUTH_REQUIRED = self.original_auth_required
+        main.TMP_DIR = self.original_tmp_dir
+        main.ASSIGNMENT_MATERIALS_DIR = self.original_materials_dir
         self.tmp.cleanup()
 
     def test_student_sees_class_assignment_after_joining(self) -> None:
@@ -213,6 +224,86 @@ class ClassesAndDownloadTests(unittest.TestCase):
                     display_id="T999",
                 ),
             )
+        self.assertEqual(caught.exception.status_code, 403)
+
+    def test_assignment_materials_upload_and_student_download_respect_class_membership(self) -> None:
+        teacher = main.AuthContext(
+            email="teacher@example.com",
+            role=main.ROLE_TEACHER,
+            display_id="T001",
+        )
+        student = main.AuthContext(
+            email="student@example.com",
+            role=main.ROLE_STUDENT,
+            display_id="2024001",
+        )
+        outsider = main.AuthContext(
+            email="outsider@example.com",
+            role=main.ROLE_STUDENT,
+            display_id="2024999",
+        )
+
+        created = main.create_class(
+            main.CreateClassRequest(
+                action="CREATE_CLASS",
+                timestamp=1,
+                payload=main.CreateClassPayload(
+                    teacher_id="T001",
+                    class_id="cs101",
+                    class_name="CS101 Spring",
+                    course_id="course_cs",
+                    course_title="Computer Science",
+                    join_code="JOIN101",
+                ),
+            ),
+            auth=teacher,
+        )["payload"]
+        main.create_assignment(
+            main.AssignmentRequest(
+                action="CREATE_ASSIGNMENT",
+                timestamp=2,
+                payload=main.AssignmentPayload(
+                    teacher_id="T001",
+                    assignment_id="home_materials",
+                    title="Materials Homework",
+                    class_id=created["class_id"],
+                ),
+            ),
+            auth=teacher,
+        )
+        main.join_class(
+            main.JoinClassRequest(
+                action="JOIN_CLASS",
+                timestamp=3,
+                payload=main.JoinClassPayload(
+                    student_id="2024001",
+                    join_code="JOIN101",
+                ),
+            ),
+            auth=student,
+        )
+
+        uploaded = asyncio.run(
+            main.upload_assignment_materials(
+                "home_materials",
+                file=UploadFile(
+                    filename="spec.pdf",
+                    file=io.BytesIO(b"assignment spec"),
+                ),
+                auth=teacher,
+            )
+        )["payload"]
+
+        self.assertEqual(uploaded["file_name"], "spec.pdf")
+        assignments = main.list_open_assignments(auth=student)["payload"]["assignments"]
+        self.assertTrue(assignments[0]["has_materials"])
+        self.assertEqual(assignments[0]["materials_file_name"], "spec.pdf")
+
+        response = main.download_assignment_materials("home_materials", auth=student)
+        self.assertIsInstance(response, FileResponse)
+
+        with self.assertRaises(HTTPException) as caught:
+            main.download_assignment_materials("home_materials", auth=outsider)
         self.assertEqual(caught.exception.status_code, 403)
 
 

@@ -129,7 +129,7 @@ echo 'export DEEPSEEK_API_KEY=your-new-deepseek-key' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-未配置 key 时，小助手会输出内置本地帮助摘要。老师端 AI 查重和 AI 审阅报告不读取学生机器上的 key，它们读取服务器 Module B 的 `MODULE_B_DEEPSEEK_API_KEY` / `DEEPSEEK_API_KEY`。
+未配置 key 时，小助手会输出内置本地帮助摘要。老师端 AI 查重和 AI 审阅报告不读取学生机器上的 key；它们读取老师端本机 `MODULE_C_DEEPSEEK_API_KEY`，或服务器 Module B 的 `MODULE_B_DEEPSEEK_API_KEY` / `DEEPSEEK_API_KEY`。
 
 ## 配置
 

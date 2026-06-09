@@ -27,7 +27,7 @@ if ! python3 -m venv "$VENV_DIR" 2>/tmp/haocean_teacher_venv_error.log; then
 fi
 
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
-"$VENV_DIR/bin/python" -m pip install --upgrade \
+"$VENV_DIR/bin/python" -m pip install --upgrade --force-reinstall --no-cache-dir \
   "git+$REPO_URL@$REF#subdirectory=module_c_controller"
 
 ln -sf "$VENV_DIR/bin/haocean-teacher" "$BIN_DIR/haocean-teacher"
@@ -41,3 +41,6 @@ echo
 echo "Next:"
 echo "  haocean-teacher setup"
 echo "  haocean-teacher login"
+echo
+echo "Uninstall old local CLI install:"
+echo "  curl -fsSL https://raw.githubusercontent.com/Haohaha-11/Haocean_Mooc/${REF}/uninstall.sh | bash"

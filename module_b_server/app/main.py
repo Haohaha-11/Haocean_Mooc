@@ -47,6 +47,7 @@ DB_DIR = DATA_DIR / "db"
 TMP_DIR = DATA_DIR / "tmp"
 SUBMISSIONS_DIR = DATA_DIR / "submissions"
 FEEDBACK_DIR = DATA_DIR / "feedback"
+ASSIGNMENT_MATERIALS_DIR = DATA_DIR / "assignment_materials"
 DB_PATH = DB_DIR / "engine.db"
 
 SYSTEM_NAME = os.getenv("MODULE_B_SYSTEM_NAME", "Haocean Mooc")
@@ -103,7 +104,7 @@ DEEPSEEK_PREFILTER_SIMILARITY = _env_float("DEEPSEEK_PREFILTER_SIMILARITY", 0.45
 ROLE_STUDENT = "student"
 ROLE_TEACHER = "teacher"
 
-for d in [DB_DIR, TMP_DIR, SUBMISSIONS_DIR, FEEDBACK_DIR]:
+for d in [DB_DIR, TMP_DIR, SUBMISSIONS_DIR, FEEDBACK_DIR, ASSIGNMENT_MATERIALS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Module B - Assignment Engine")
@@ -122,6 +123,12 @@ def safe_name(name: str) -> str:
     例如 ../../evil.tar.gz 会变成 evil.tar.gz。
     """
     return Path(name).name
+
+
+def safe_storage_component(value: str, fallback: str = "item") -> str:
+    base = safe_name(value).strip()
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("._")
+    return cleaned or fallback
 
 
 def calc_md5(file_path: Path) -> str:
@@ -420,6 +427,10 @@ def smtp_configured() -> bool:
 
 def deepseek_configured() -> bool:
     return bool(DEEPSEEK_API_KEY)
+
+
+def resolve_deepseek_api_key(provided_key: object = "") -> str:
+    return (provided_key.strip() if isinstance(provided_key, str) else "") or DEEPSEEK_API_KEY
 
 
 def should_use_smtp_login_auth() -> bool:
@@ -1159,6 +1170,10 @@ def list_open_assignments(
                 a.created_by,
                 a.class_id,
                 a.assignment_weight,
+                am.file_name AS materials_file_name,
+                am.file_size AS materials_file_size,
+                am.md5 AS materials_md5,
+                am.uploaded_at AS materials_uploaded_at,
                 c.class_name,
                 co.title AS course_title,
                 a.created_at,
@@ -1166,6 +1181,7 @@ def list_open_assignments(
             FROM assignments a
             LEFT JOIN classes c ON c.class_id = a.class_id
             LEFT JOIN courses co ON co.course_id = c.course_id
+            LEFT JOIN assignment_materials am ON am.assignment_id = a.assignment_id
             WHERE a.status = 'open'
               AND (
                     a.class_id IS NULL
@@ -1190,6 +1206,10 @@ def list_open_assignments(
                 a.created_by,
                 a.class_id,
                 a.assignment_weight,
+                am.file_name AS materials_file_name,
+                am.file_size AS materials_file_size,
+                am.md5 AS materials_md5,
+                am.uploaded_at AS materials_uploaded_at,
                 c.class_name,
                 co.title AS course_title,
                 a.created_at,
@@ -1197,6 +1217,7 @@ def list_open_assignments(
             FROM assignments a
             LEFT JOIN classes c ON c.class_id = a.class_id
             LEFT JOIN courses co ON co.course_id = c.course_id
+            LEFT JOIN assignment_materials am ON am.assignment_id = a.assignment_id
             WHERE a.status = 'open'
               AND (
                     a.created_by = ?
@@ -1217,6 +1238,10 @@ def list_open_assignments(
                 a.created_by,
                 a.class_id,
                 a.assignment_weight,
+                am.file_name AS materials_file_name,
+                am.file_size AS materials_file_size,
+                am.md5 AS materials_md5,
+                am.uploaded_at AS materials_uploaded_at,
                 c.class_name,
                 co.title AS course_title,
                 a.created_at,
@@ -1224,19 +1249,263 @@ def list_open_assignments(
             FROM assignments a
             LEFT JOIN classes c ON c.class_id = a.class_id
             LEFT JOIN courses co ON co.course_id = c.course_id
+            LEFT JOIN assignment_materials am ON am.assignment_id = a.assignment_id
             WHERE a.status = 'open'
             ORDER BY a.created_at DESC;
             """
         ).fetchall()
     conn.close()
 
+    assignments = []
+    for row in rows:
+        item = dict(row)
+        has_materials = bool(item.get("materials_file_name"))
+        item["has_materials"] = has_materials
+        item["materials_download_url"] = (
+            f"/v1/assignments/{item['assignment_id']}/materials/download"
+            if has_materials
+            else None
+        )
+        assignments.append(item)
+
     return {
         "code": 200,
         "message": "open assignments returned",
         "payload": {
-            "assignments": [dict(row) for row in rows]
+            "assignments": assignments
         },
     }
+
+
+def get_assignment_access_row(conn, assignment_id: str):
+    return conn.execute(
+        """
+        SELECT
+            a.assignment_id,
+            a.created_by,
+            a.class_id,
+            c.teacher_id AS class_teacher_id
+        FROM assignments a
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        WHERE a.assignment_id = ?;
+        """,
+        (assignment_id,),
+    ).fetchone()
+
+
+def ensure_teacher_can_update_assignment(conn, assignment_id: str, auth: AuthContext | None):
+    row = get_assignment_access_row(conn, assignment_id)
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": 400, "message": "assignment_id does not exist"},
+        )
+    if auth is not None:
+        owns_assignment = row["created_by"] == auth.display_id
+        owns_class = row["class_teacher_id"] == auth.display_id
+        if not owns_assignment and not owns_class:
+            raise create_auth_error("teacher can only update own assignments", 403)
+    return row
+
+
+def ensure_assignment_materials_visible(conn, assignment_id: str, auth: AuthContext | None):
+    row = get_assignment_access_row(conn, assignment_id)
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": 400, "message": "assignment_id does not exist"},
+        )
+    if auth is None:
+        return row
+    if auth.role == ROLE_TEACHER:
+        owns_assignment = row["created_by"] == auth.display_id
+        owns_class = row["class_teacher_id"] == auth.display_id
+        if owns_assignment or owns_class:
+            return row
+        raise create_auth_error("teacher can only access own assignments", 403)
+    if auth.role == ROLE_STUDENT:
+        class_id = row["class_id"]
+        if not class_id:
+            return row
+        enrollment = conn.execute(
+            """
+            SELECT class_id
+            FROM class_enrollments
+            WHERE class_id = ?
+              AND student_id = ?;
+            """,
+            (class_id, auth.display_id),
+        ).fetchone()
+        if enrollment is not None:
+            return row
+        raise create_auth_error("student is not enrolled in assignment class", 403)
+    raise create_auth_error("authorization role is not allowed", 403)
+
+
+def build_assignment_materials_payload(assignment_id: str, material_row) -> dict[str, object]:
+    if material_row is None:
+        return {
+            "assignment_id": assignment_id,
+            "has_materials": False,
+            "materials": None,
+        }
+    return {
+        "assignment_id": assignment_id,
+        "has_materials": True,
+        "materials": {
+            "assignment_id": assignment_id,
+            "file_name": material_row["file_name"],
+            "file_size": material_row["file_size"],
+            "md5": material_row["md5"],
+            "uploaded_at": material_row["uploaded_at"],
+            "download_url": f"/v1/assignments/{assignment_id}/materials/download",
+        },
+    }
+
+
+@app.post("/v1/assignments/{assignment_id}/materials")
+async def upload_assignment_materials(
+    assignment_id: str,
+    file: UploadFile = File(...),
+    auth: AuthContext | None = Depends(require_teacher),
+):
+    auth = resolved_auth(auth)
+    conn = get_conn()
+    try:
+        ensure_teacher_can_update_assignment(conn, assignment_id, auth)
+    except Exception:
+        conn.close()
+        raise
+
+    upload_file_name = safe_name(file.filename or f"{assignment_id}_materials.zip")
+    safe_assignment_id = safe_storage_component(assignment_id, "assignment")
+    timestamp = int(time.time())
+    tmp_file = TMP_DIR / f"{timestamp}_{safe_assignment_id}_{upload_file_name}"
+    with tmp_file.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    actual_md5 = calc_md5(tmp_file)
+    file_size = tmp_file.stat().st_size
+    assignment_dir = ASSIGNMENT_MATERIALS_DIR / safe_assignment_id
+    assignment_dir.mkdir(parents=True, exist_ok=True)
+    final_file = assignment_dir / f"{timestamp}_{upload_file_name}"
+    previous = conn.execute(
+        """
+        SELECT file_path
+        FROM assignment_materials
+        WHERE assignment_id = ?;
+        """,
+        (assignment_id,),
+    ).fetchone()
+    previous_path = Path(previous["file_path"]) if previous is not None else None
+    shutil.move(str(tmp_file), str(final_file))
+    uploaded_at = now_str()
+    conn.execute(
+        """
+        INSERT INTO assignment_materials (
+            assignment_id, file_name, file_path, md5, file_size, uploaded_by, uploaded_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(assignment_id) DO UPDATE SET
+            file_name = excluded.file_name,
+            file_path = excluded.file_path,
+            md5 = excluded.md5,
+            file_size = excluded.file_size,
+            uploaded_by = excluded.uploaded_by,
+            uploaded_at = excluded.uploaded_at;
+        """,
+        (
+            assignment_id,
+            upload_file_name,
+            str(final_file),
+            actual_md5,
+            file_size,
+            auth.display_id if auth is not None else "",
+            uploaded_at,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    if previous_path is not None and previous_path != final_file:
+        previous_path.unlink(missing_ok=True)
+
+    return {
+        "code": 200,
+        "message": "assignment materials uploaded",
+        "payload": {
+            "assignment_id": assignment_id,
+            "file_name": upload_file_name,
+            "file_size": file_size,
+            "md5": actual_md5,
+            "uploaded_at": uploaded_at,
+            "download_url": f"/v1/assignments/{assignment_id}/materials/download",
+        },
+    }
+
+
+@app.get("/v1/assignments/{assignment_id}/materials")
+def get_assignment_materials(
+    assignment_id: str,
+    auth: AuthContext | None = Depends(get_auth_context),
+):
+    auth = resolved_auth(auth)
+    conn = get_conn()
+    try:
+        ensure_assignment_materials_visible(conn, assignment_id, auth)
+        material_row = conn.execute(
+            """
+            SELECT file_name, file_path, md5, file_size, uploaded_at
+            FROM assignment_materials
+            WHERE assignment_id = ?;
+            """,
+            (assignment_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    return {
+        "code": 200,
+        "message": "assignment materials returned",
+        "payload": build_assignment_materials_payload(assignment_id, material_row),
+    }
+
+
+@app.get("/v1/assignments/{assignment_id}/materials/download")
+def download_assignment_materials(
+    assignment_id: str,
+    auth: AuthContext | None = Depends(get_auth_context),
+):
+    auth = resolved_auth(auth)
+    conn = get_conn()
+    try:
+        ensure_assignment_materials_visible(conn, assignment_id, auth)
+        material_row = conn.execute(
+            """
+            SELECT file_name, file_path
+            FROM assignment_materials
+            WHERE assignment_id = ?;
+            """,
+            (assignment_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if material_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": 404, "message": "assignment materials do not exist"},
+        )
+    material_path = Path(str(material_row["file_path"]))
+    if not material_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail={"code": 404, "message": "assignment materials file is missing"},
+        )
+    return FileResponse(
+        path=material_path,
+        filename=str(material_row["file_name"]),
+        media_type="application/octet-stream",
+    )
 
 
 @app.post("/v1/submissions")
@@ -1996,6 +2265,21 @@ def init_extra_db():
             archive_path TEXT NOT NULL,
             created_at TEXT NOT NULL,
             note TEXT
+        );
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS assignment_materials (
+            material_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            assignment_id TEXT NOT NULL UNIQUE,
+            file_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            md5 TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            uploaded_by TEXT,
+            uploaded_at TEXT NOT NULL
         );
         """
     )
@@ -3804,8 +4088,10 @@ def call_deepseek_plagiarism_judge(
     *,
     assignment_id: str,
     pair: dict[str, object],
+    api_key: str = "",
 ) -> dict[str, object]:
-    if not DEEPSEEK_API_KEY:
+    effective_api_key = resolve_deepseek_api_key(api_key)
+    if not effective_api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is not configured")
 
     body = {
@@ -3854,7 +4140,7 @@ def call_deepseek_plagiarism_judge(
         f"{DEEPSEEK_BASE_URL}/chat/completions",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -3953,8 +4239,9 @@ def local_ai_grading_report(row, excerpt: str) -> dict[str, object]:
     return report
 
 
-def call_deepseek_grading_report(row, excerpt: str) -> dict[str, object]:
-    if not DEEPSEEK_API_KEY:
+def call_deepseek_grading_report(row, excerpt: str, api_key: str = "") -> dict[str, object]:
+    effective_api_key = resolve_deepseek_api_key(api_key)
+    if not effective_api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is not configured")
 
     body = {
@@ -3999,7 +4286,7 @@ def call_deepseek_grading_report(row, excerpt: str) -> dict[str, object]:
         f"{DEEPSEEK_BASE_URL}/chat/completions",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -4039,6 +4326,7 @@ def call_deepseek_grading_report(row, excerpt: str) -> dict[str, object]:
 def get_submission_ai_grade_report(
     submission_id: int,
     auth: AuthContext | None = Depends(require_teacher),
+    x_deepseek_api_key: str = Header("", alias="X-DeepSeek-API-Key"),
 ):
     auth = resolved_auth(auth)
     conn = get_conn()
@@ -4078,6 +4366,7 @@ def get_submission_ai_grade_report(
         conn.close()
         raise create_auth_error("teacher can only view own class submissions", 403)
 
+    effective_deepseek_api_key = resolve_deepseek_api_key(x_deepseek_api_key)
     cached = None
     if table_exists(conn, "ai_grading_reports"):
         cached = conn.execute(
@@ -4089,23 +4378,28 @@ def get_submission_ai_grade_report(
             (submission_id,),
         ).fetchone()
     if cached is not None:
-        conn.close()
-        report = json.loads(cached["report_json"])
-        return {
-            "code": 200,
-            "message": "ai grading report returned",
-            "payload": {
-                **dict(cached),
-                "report": report,
-            },
-        }
+        if not effective_deepseek_api_key or cached["source"] == "deepseek":
+            conn.close()
+            report = json.loads(cached["report_json"])
+            return {
+                "code": 200,
+                "message": "ai grading report returned",
+                "payload": {
+                    **dict(cached),
+                    "report": report,
+                },
+            }
 
     excerpt = trim_text_for_ai(read_text_from_submission_package(row["file_path"]))
     generated_at = now_str()
-    source = "deepseek" if DEEPSEEK_API_KEY else "local"
-    model = DEEPSEEK_MODEL if DEEPSEEK_API_KEY else "local-summary"
+    source = "deepseek" if effective_deepseek_api_key else "local"
+    model = DEEPSEEK_MODEL if effective_deepseek_api_key else "local-summary"
     try:
-        report = call_deepseek_grading_report(row, excerpt) if DEEPSEEK_API_KEY else local_ai_grading_report(row, excerpt)
+        report = (
+            call_deepseek_grading_report(row, excerpt, api_key=effective_deepseek_api_key)
+            if effective_deepseek_api_key
+            else local_ai_grading_report(row, excerpt)
+        )
     except Exception as exc:
         source = "local"
         model = "local-summary"
@@ -4161,6 +4455,7 @@ def get_submission_ai_grade_report(
 def check_plagiarism(
     req: PlagiarismCheckRequest,
     auth: AuthContext | None = Depends(require_teacher),
+    x_deepseek_api_key: str = Header("", alias="X-DeepSeek-API-Key"),
 ):
     """
     C -> B：触发某个作业的查重。
@@ -4202,7 +4497,8 @@ def check_plagiarism(
             },
         )
 
-    if method in {"hybrid", "ai"} and not deepseek_configured():
+    effective_deepseek_api_key = resolve_deepseek_api_key(x_deepseek_api_key)
+    if method in {"hybrid", "ai"} and not effective_deepseek_api_key:
         raise HTTPException(
             status_code=400,
             detail={
@@ -4351,6 +4647,7 @@ def check_plagiarism(
                 verdict = call_deepseek_plagiarism_judge(
                     assignment_id=p.assignment_id,
                     pair=pair,
+                    api_key=effective_deepseek_api_key,
                 )
                 ai_reviewed_count += 1
             except RuntimeError as exc:

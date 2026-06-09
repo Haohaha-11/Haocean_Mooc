@@ -5,7 +5,9 @@ from datetime import datetime
 import re
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
+import zipfile
 from zoneinfo import ZoneInfo
 
 from .auth import ensure_teacher_auth, render_startup
@@ -50,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--class-id", default="")
     publish.add_argument("--description", default="")
     publish.add_argument("--deadline", default="")
+    publish.add_argument("--materials", default="", help="Assignment description file or attachment directory")
     publish.add_argument("--weight", type=float, default=None, help="Relative weight in the course score")
     publish_peer = publish.add_mutually_exclusive_group()
     publish_peer.add_argument("--peer-review", dest="peer_review", action="store_true", default=None, help="Enable peer review")
@@ -84,12 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     assignment = subparsers.add_parser("assignment", help="Manage assignments")
     assignment_sub = assignment.add_subparsers(dest="assignment_command", required=True)
+    assignment_sub.add_parser("list", help="List published assignments")
     assignment_create = assignment_sub.add_parser("create", help="Create an assignment")
     assignment_create.add_argument("assignment_id")
     assignment_create.add_argument("title")
     assignment_create.add_argument("--class-id", default="")
     assignment_create.add_argument("--description", default="")
     assignment_create.add_argument("--deadline", default="")
+    assignment_create.add_argument("--materials", default="", help="Assignment description file or attachment directory")
     assignment_create.add_argument("--weight", type=float, default=1.0, help="Relative weight in the course score")
     assignment_create.add_argument("--peer-review", action="store_true", help="Enable peer review")
     assignment_create.add_argument("--teacher-weight", type=float, default=None, help="Teacher score weight when peer review is enabled")
@@ -456,6 +461,44 @@ def _prompt_bool_value(label: str, *, default: bool = False) -> bool:
         print(f"{label} must be y or n.")
 
 
+def _safe_archive_name(value: str) -> str:
+    base = Path(value).name.strip()
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("._")
+    return cleaned or "assignment"
+
+
+def _prepare_materials_upload(
+    raw_path: str,
+    assignment_id: str,
+) -> tuple[Path | None, str, tempfile.TemporaryDirectory[str] | None]:
+    value = raw_path.strip()
+    if not value:
+        return None, "", None
+    materials_path = Path(value).expanduser()
+    if not materials_path.exists():
+        raise SystemExit(f"materials path does not exist: {materials_path}")
+    if materials_path.is_file():
+        return materials_path, materials_path.name, None
+    if not materials_path.is_dir():
+        raise SystemExit(f"materials path must be a file or directory: {materials_path}")
+
+    temp_dir = tempfile.TemporaryDirectory()
+    archive_name = f"{_safe_archive_name(assignment_id)}_materials.zip"
+    archive_path = Path(temp_dir.name) / archive_name
+    file_count = 0
+    with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for item in sorted(materials_path.rglob("*")):
+            if not item.is_file():
+                continue
+            arcname = item.relative_to(materials_path.parent).as_posix()
+            zipf.write(item, arcname)
+            file_count += 1
+    if file_count == 0:
+        temp_dir.cleanup()
+        raise SystemExit(f"materials directory has no files: {materials_path}")
+    return archive_path, archive_name, temp_dir
+
+
 def _write_current_class(settings: Settings, class_id: str) -> Settings:
     write_user_config(settings.config_dir, {"current_class_id": class_id})
     return load_settings(settings.project_root, config_dir=settings.config_dir)
@@ -593,6 +636,7 @@ def _publish_assignment_interactive(
     title = args.title.strip() or _prompt_value("Title", default=assignment_id, required=True)
     class_id = args.class_id.strip() or _choose_class_id(repo, settings)
     description = args.description.strip() or _prompt_value("Description", required=False)
+    materials_path = args.materials.strip() or _prompt_value("Materials Path", required=False)
     try:
         deadline = _normalize_deadline(args.deadline) if args.deadline.strip() else _prompt_deadline_value()
     except ValueError as exc:
@@ -620,17 +664,29 @@ def _publish_assignment_interactive(
         teacher_weight,
         args.peer_weight,
     )
-    created = repo.create_assignment(
-        assignment_id=assignment_id,
-        title=title,
-        description=description,
-        deadline=deadline,
-        class_id=class_id,
-        assignment_weight=assignment_weight,
-        peer_review_enabled=peer_review_enabled,
-        teacher_weight=teacher_weight,
-        peer_weight=peer_weight,
-    )
+    upload_path, upload_name, temp_dir = _prepare_materials_upload(materials_path, assignment_id)
+    uploaded_materials = None
+    try:
+        created = repo.create_assignment(
+            assignment_id=assignment_id,
+            title=title,
+            description=description,
+            deadline=deadline,
+            class_id=class_id,
+            assignment_weight=assignment_weight,
+            peer_review_enabled=peer_review_enabled,
+            teacher_weight=teacher_weight,
+            peer_weight=peer_weight,
+        )
+        if upload_path is not None:
+            uploaded_materials = repo.upload_assignment_materials(
+                assignment_id,
+                upload_path,
+                file_name=upload_name,
+            )
+    finally:
+        if temp_dir is not None:
+            temp_dir.cleanup()
     if class_id:
         _write_current_class(settings, class_id)
     created_peer_review = created.get("peer_review_enabled")
@@ -639,6 +695,8 @@ def _publish_assignment_interactive(
     print(f"Deadline   : {created.get('deadline') or deadline or '-'}")
     print(f"Weight     : {created.get('assignment_weight')}")
     print(f"Peer Review: {_bool_label(peer_review_enabled if created_peer_review is None else created_peer_review)}")
+    if uploaded_materials is not None:
+        print(f"Materials  : {uploaded_materials.get('file_name')} ({uploaded_materials.get('file_size')} bytes)")
     if created_peer_review is None and peer_review_enabled:
         print("Warning    : peer review fields were not returned; restart Module B if this should be enabled.")
     if created.get("peer_review_enabled"):
@@ -749,6 +807,24 @@ def _print_classes(repo: ModuleBRepository) -> None:
         return
     for item in classes:
         print(f"{item.class_id}\t{item.course_title}\t{item.class_name}\tcode={item.join_code}")
+
+
+def _print_assignments(repo: ModuleBRepository) -> None:
+    assignments = repo.list_assignments()
+    if not assignments:
+        print("No published assignments.")
+        return
+    print("Assignment\tTitle\tClass\tWeight\tMaterials\tDeadline\tCreated\tStatus")
+    for item in assignments:
+        class_label = item.get("class_name") or item.get("class_id") or "global"
+        materials_label = item.get("materials_file_name") or "-"
+        print(
+            f"{item.get('assignment_id')}\t{item.get('title')}\t"
+            f"{class_label}\t{item.get('assignment_weight')}\t"
+            f"{materials_label}\t"
+            f"{item.get('deadline') or ''}\t{item.get('created_at') or ''}\t"
+            f"{item.get('status') or ''}"
+        )
 
 
 def _print_plagiarism(repo: ModuleBRepository, assignment_id: str) -> None:
@@ -1049,6 +1125,9 @@ def main() -> None:
         return
 
     if args.command == "assignment":
+        if args.assignment_command == "list":
+            _print_assignments(repo)
+            return
         if args.assignment_command == "view":
             _print_assignment_workspace(repo, args.assignment_id)
             return
@@ -1061,21 +1140,35 @@ def main() -> None:
             deadline = _normalize_deadline(args.deadline)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        created = repo.create_assignment(
-            assignment_id=args.assignment_id,
-            title=args.title,
-            description=args.description,
-            deadline=deadline,
-            class_id=args.class_id,
-            assignment_weight=args.weight,
-            peer_review_enabled=args.peer_review,
-            teacher_weight=teacher_weight,
-            peer_weight=peer_weight,
-        )
+        upload_path, upload_name, temp_dir = _prepare_materials_upload(args.materials, args.assignment_id)
+        uploaded_materials = None
+        try:
+            created = repo.create_assignment(
+                assignment_id=args.assignment_id,
+                title=args.title,
+                description=args.description,
+                deadline=deadline,
+                class_id=args.class_id,
+                assignment_weight=args.weight,
+                peer_review_enabled=args.peer_review,
+                teacher_weight=teacher_weight,
+                peer_weight=peer_weight,
+            )
+            if upload_path is not None:
+                uploaded_materials = repo.upload_assignment_materials(
+                    args.assignment_id,
+                    upload_path,
+                    file_name=upload_name,
+                )
+        finally:
+            if temp_dir is not None:
+                temp_dir.cleanup()
         print(f"Assignment : {created['assignment_id']} {created['title']}")
         print(f"Class      : {_class_display(repo, str(created.get('class_id') or args.class_id))}")
         print(f"Deadline   : {created.get('deadline') or deadline or '-'}")
         print(f"Weight     : {created.get('assignment_weight')}")
+        if uploaded_materials is not None:
+            print(f"Materials  : {uploaded_materials.get('file_name')} ({uploaded_materials.get('file_size')} bytes)")
         created_peer_review = created.get("peer_review_enabled")
         print(f"Peer Review: {_bool_label(args.peer_review if created_peer_review is None else created_peer_review)}")
         if created_peer_review is None and args.peer_review:

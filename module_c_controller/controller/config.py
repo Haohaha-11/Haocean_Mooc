@@ -278,6 +278,7 @@ def load_settings(
 ) -> Settings:
     load_dotenv(project_root / ".env")
     resolved_config_dir = (config_dir or default_config_dir()).expanduser().resolve()
+    load_dotenv(resolved_config_dir / ".env", override=False)
     user_config = _read_user_config(resolved_config_dir)
     selected_profile_name, user_config = _select_profile_config(user_config, profile_name)
     default_auth_token_file = (

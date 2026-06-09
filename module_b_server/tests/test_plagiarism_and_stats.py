@@ -254,8 +254,13 @@ class PlagiarismAndStatsTests(unittest.TestCase):
         original_call = main.call_deepseek_plagiarism_judge
         calls = []
 
-        def fake_deepseek_call(*, assignment_id: str, pair: dict[str, object]) -> dict[str, object]:
-            calls.append((assignment_id, pair))
+        def fake_deepseek_call(
+            *,
+            assignment_id: str,
+            pair: dict[str, object],
+            api_key: str = "",
+        ) -> dict[str, object]:
+            calls.append((assignment_id, pair, api_key))
             return {
                 "ai_similarity": 0.92,
                 "likely_plagiarism": True,
@@ -286,12 +291,94 @@ class PlagiarismAndStatsTests(unittest.TestCase):
 
         payload = response["payload"]
         self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][2], "test-key")
         self.assertEqual(payload["method"], "hybrid")
         self.assertEqual(payload["ai_reviewed_count"], 1)
         self.assertEqual(payload["suspected_pair_count"], 1)
         pair = payload["suspected_pairs"][0]
         self.assertEqual(pair["ai_similarity"], 0.92)
         self.assertGreater(pair["local_similarity"], 0)
+
+    def test_hybrid_plagiarism_accepts_teacher_provided_deepseek_key(self) -> None:
+        first_archive = self.root / "teacher_key_first.tar.gz"
+        second_archive = self.root / "teacher_key_second.tar.gz"
+        content = "def solve(items):\n    total = sum(items)\n    return total\n"
+        build_archive(first_archive, content)
+        build_archive(second_archive, content)
+
+        conn = main.get_conn()
+        conn.execute(
+            """
+            INSERT INTO assignments (
+                assignment_id, title, description, deadline, created_by, created_at, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            ("home_teacher_key", "Teacher Key", "", "", "T001", main.now_str(), "open"),
+        )
+        for student_id, archive in [("2024001", first_archive), ("2024002", second_archive)]:
+            conn.execute(
+                """
+                INSERT INTO submissions (
+                    student_id, assignment_id, file_name, file_path, md5, submit_time, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    student_id,
+                    "home_teacher_key",
+                    archive.name,
+                    str(archive),
+                    f"md5-{student_id}",
+                    main.now_str(),
+                    "pending",
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        original_key = main.DEEPSEEK_API_KEY
+        original_call = main.call_deepseek_plagiarism_judge
+        calls = []
+
+        def fake_deepseek_call(
+            *,
+            assignment_id: str,
+            pair: dict[str, object],
+            api_key: str = "",
+        ) -> dict[str, object]:
+            calls.append(api_key)
+            return {
+                "ai_similarity": 0.91,
+                "likely_plagiarism": True,
+                "confidence": 0.9,
+                "reason": "teacher key was used",
+                "evidence": [],
+            }
+
+        main.DEEPSEEK_API_KEY = ""
+        main.call_deepseek_plagiarism_judge = fake_deepseek_call
+        try:
+            response = main.check_plagiarism(
+                main.PlagiarismCheckRequest(
+                    action="CHECK_PLAGIARISM",
+                    timestamp=1,
+                    payload=main.PlagiarismCheckPayload(
+                        assignment_id="home_teacher_key",
+                        method="hybrid",
+                        threshold=0.75,
+                        ai_prefilter=0.1,
+                    ),
+                ),
+                auth=None,
+                x_deepseek_api_key="teacher-key",
+            )
+        finally:
+            main.DEEPSEEK_API_KEY = original_key
+            main.call_deepseek_plagiarism_judge = original_call
+
+        self.assertEqual(calls, ["teacher-key"])
+        self.assertEqual(response["payload"]["suspected_pair_count"], 1)
 
     def test_score_stats_and_student_history(self) -> None:
         conn = main.get_conn()

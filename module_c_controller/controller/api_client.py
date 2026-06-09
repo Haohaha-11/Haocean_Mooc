@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import time
 from typing import Any
@@ -14,6 +15,14 @@ from .status import local_to_service_status, service_to_local_status
 
 class ModuleCApiError(RuntimeError):
     pass
+
+
+def teacher_deepseek_api_key() -> str:
+    return (
+        os.getenv("MODULE_C_DEEPSEEK_API_KEY", "").strip()
+        or os.getenv("DEEPSEEK_API_KEY", "").strip()
+        or os.getenv("HAOCEAN_DEEPSEEK_API_KEY", "").strip()
+    )
 
 
 @dataclass(frozen=True)
@@ -201,6 +210,11 @@ class ModuleBRepository:
         payload = self._payload(response)
         return [ClassInfo(**item) for item in payload.get("classes", [])]
 
+    def list_assignments(self) -> list[dict[str, Any]]:
+        response = self._request("GET", "/v1/assignments/open")
+        payload = self._payload(response)
+        return list(payload.get("assignments", []))
+
     def create_assignment(
         self,
         assignment_id: str,
@@ -233,6 +247,21 @@ class ModuleBRepository:
                 },
             },
         )
+        return self._payload(response)
+
+    def upload_assignment_materials(
+        self,
+        assignment_id: str,
+        materials_path: Path,
+        file_name: str = "",
+    ) -> dict[str, Any]:
+        upload_name = Path(file_name or materials_path.name).name
+        with materials_path.open("rb") as f:
+            response = self._request(
+                "POST",
+                f"/v1/assignments/{quote(assignment_id)}/materials",
+                files={"file": (upload_name, f, "application/octet-stream")},
+            )
         return self._payload(response)
 
     def set_peer_review_stage(
@@ -426,10 +455,14 @@ class ModuleBRepository:
         return target_path
 
     def _with_auth(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        if not self.auth_token:
-            return kwargs
         headers = dict(kwargs.get("headers") or {})
-        headers.setdefault("Authorization", f"Bearer {self.auth_token}")
+        if self.auth_token:
+            headers.setdefault("Authorization", f"Bearer {self.auth_token}")
+        deepseek_api_key = teacher_deepseek_api_key()
+        if deepseek_api_key:
+            headers.setdefault("X-DeepSeek-API-Key", deepseek_api_key)
+        if not headers:
+            return kwargs
         return {**kwargs, "headers": headers}
 
     def _payload(self, response: requests.Response) -> dict[str, Any]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import zipfile
 from pathlib import Path
 
 from .ai_help import add_ai_help_arguments, run_ai_help
@@ -38,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("login", help="Login with email verification code")
     subparsers.add_parser("profiles", help="List local student profiles")
     subparsers.add_parser("list", help="List open assignments")
+    materials = subparsers.add_parser("materials", help="Download assignment materials")
+    materials.add_argument("assignment_id", nargs="?", default="", help="Assignment ID")
+    materials.add_argument("--no-extract", action="store_true", help="Do not extract zip materials")
     subparsers.add_parser("classes", help="List joined classes")
     join = subparsers.add_parser("join", help="Join a class by teacher-provided code")
     join.add_argument("class_code", nargs="?", default="", help="Class join code")
@@ -315,9 +319,10 @@ def _print_assignments(client: ModuleBClient, settings: Settings) -> None:
         return
     for assignment in assignments:
         class_label = assignment.class_name or "global"
+        materials_label = "materials=yes" if assignment.has_materials else "materials=no"
         print(
             f"{assignment.assignment_id}\t{assignment.title}\t"
-            f"{class_label}\t{assignment.deadline}"
+            f"{class_label}\t{materials_label}\t{assignment.deadline}"
         )
 
 
@@ -395,6 +400,34 @@ def _print_preview(settings: Settings, assignment_id: str, allow_zip: bool) -> N
         print("  - <none>")
 
 
+def _safe_extract_zip(zip_path: Path, target_dir: Path) -> None:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    resolved_target = target_dir.resolve()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        safe_members = []
+        for member in zf.infolist():
+            member_path = (target_dir / member.filename).resolve()
+            if member_path != resolved_target and resolved_target not in member_path.parents:
+                raise SystemExit(f"Refusing to extract unsafe path: {member.filename}")
+            safe_members.append(member)
+        zf.extractall(target_dir, members=safe_members)
+
+
+def _download_materials(
+    client: ModuleBClient,
+    settings: Settings,
+    assignment_id: str,
+    *,
+    extract: bool = True,
+) -> None:
+    target_dir = settings.workspace_dir / assignment_id / "materials"
+    downloaded_path = client.download_assignment_materials(assignment_id, target_dir)
+    print(f"Saved      : {downloaded_path}")
+    if extract and zipfile.is_zipfile(downloaded_path):
+        _safe_extract_zip(downloaded_path, target_dir)
+        print(f"Extracted  : {target_dir}")
+
+
 def main() -> None:
     args = build_parser().parse_args()
 
@@ -421,8 +454,8 @@ def main() -> None:
         _run_login_flow(client, settings, startup_rendered=startup_rendered)
         return
 
-    if args.command in {"once", "submit", "preview"} and not settings.assignment_filter:
-        assignment_id = args.assignment_id.strip() if args.command in {"submit", "preview"} else ""
+    if args.command in {"once", "submit", "preview", "materials"} and not settings.assignment_filter:
+        assignment_id = args.assignment_id.strip() if args.command in {"submit", "preview", "materials"} else ""
         if not assignment_id:
             assignment_id = input("Assignment ID: ").strip()
         if not assignment_id:
@@ -449,6 +482,16 @@ def main() -> None:
     if args.command == "list":
         _join_configured_class(client, settings)
         _print_assignments(client, settings)
+        return
+
+    if args.command == "materials":
+        _join_configured_class(client, settings)
+        _download_materials(
+            client,
+            settings,
+            settings.assignment_filter,
+            extract=not args.no_extract,
+        )
         return
 
     if not settings.student_id:
