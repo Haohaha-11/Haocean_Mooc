@@ -508,6 +508,108 @@ class PlagiarismAndStatsTests(unittest.TestCase):
         self.assertEqual(stats_row["assignment_weight"], 2.0)
         self.assertEqual(stats_row["weighted_score"], 162.0)
 
+    def test_teacher_assignment_reports_are_scoped_to_own_assignments(self) -> None:
+        conn = main.get_conn()
+        for assignment_id, teacher_id in [("own_scope", "T001"), ("other_scope", "T002")]:
+            conn.execute(
+                """
+                INSERT INTO assignments (
+                    assignment_id, title, description, deadline, created_by, created_at, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+                """,
+                (assignment_id, assignment_id, "", "", teacher_id, main.now_str(), "open"),
+            )
+        for student_id, assignment_id, score in [
+            ("2024001", "own_scope", 95),
+            ("2024001", "other_scope", 70),
+        ]:
+            cur = conn.execute(
+                """
+                INSERT INTO submissions (
+                    student_id, assignment_id, file_name, file_path, md5,
+                    submit_time, status, score, final_score
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    student_id,
+                    assignment_id,
+                    "answer.tar.gz",
+                    str(self.root / "answer.tar.gz"),
+                    f"md5-{assignment_id}",
+                    main.now_str(),
+                    "graded",
+                    score,
+                    float(score),
+                ),
+            )
+            submission_id = int(cur.lastrowid)
+            conn.execute(
+                """
+                INSERT INTO plagiarism_reports (
+                    submission_id, assignment_id, student_id, plagiarism_rate,
+                    scope, checked_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    submission_id,
+                    assignment_id,
+                    student_id,
+                    99,
+                    "current_assignment",
+                    main.now_str(),
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        teacher_one = main.AuthContext(
+            email="t1@example.com",
+            role=main.ROLE_TEACHER,
+            display_id="T001",
+        )
+
+        own_stats = main.get_assignment_score_stats("own_scope", auth=teacher_one)["payload"]
+        self.assertEqual(own_stats["summary"]["count"], 1)
+
+        history = main.get_student_score_history("2024001", auth=teacher_one)["payload"]["scores"]
+        self.assertEqual([row["assignment_id"] for row in history], ["own_scope"])
+
+        guarded_calls = [
+            lambda: main.get_assignment_score_stats("other_scope", auth=teacher_one),
+            lambda: main.list_final_scores("other_scope", auth=teacher_one),
+            lambda: main.calculate_final_scores("other_scope", auth=teacher_one),
+            lambda: main.list_assignment_plagiarism("other_scope", auth=teacher_one),
+            lambda: main.check_plagiarism(
+                main.PlagiarismCheckRequest(
+                    action="CHECK_PLAGIARISM",
+                    timestamp=1,
+                    payload=main.PlagiarismCheckPayload(
+                        assignment_id="other_scope",
+                        method="token",
+                    ),
+                ),
+                auth=teacher_one,
+            ),
+            lambda: main.config_peer_review(
+                main.PeerReviewConfigRequest(
+                    action="CONFIG_PEER_REVIEW",
+                    timestamp=1,
+                    payload=main.PeerReviewConfigPayload(
+                        assignment_id="other_scope",
+                        enabled=True,
+                    ),
+                ),
+                auth=teacher_one,
+            ),
+        ]
+        for call in guarded_calls:
+            with self.assertRaises(HTTPException) as caught:
+                call()
+            self.assertEqual(caught.exception.status_code, 403)
+
     def test_ai_grading_report_uses_local_fallback_without_key(self) -> None:
         archive_path = self.root / "ai_report.tar.gz"
         build_archive(archive_path, "def solve():\n    return 42\n")

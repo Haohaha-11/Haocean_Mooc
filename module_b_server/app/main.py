@@ -2345,9 +2345,16 @@ def init_extra_db():
             archive_name TEXT NOT NULL UNIQUE,
             archive_path TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            teacher_id TEXT,
             note TEXT
         );
         """
+    )
+    add_column_if_missing(
+        conn,
+        "archives",
+        "teacher_id",
+        "teacher_id TEXT",
     )
 
     conn.execute(
@@ -2491,9 +2498,18 @@ def plagiarism_cutoff_time() -> str:
 def calculate_plagiarism_for_submission(conn, submission_id: int) -> dict:
     submission = conn.execute(
         """
-        SELECT submission_id, student_id, assignment_id, file_path, submit_time
-        FROM submissions
-        WHERE submission_id = ?;
+        SELECT
+            s.submission_id,
+            s.student_id,
+            s.assignment_id,
+            s.file_path,
+            s.submit_time,
+            a.created_by,
+            c.teacher_id AS class_teacher_id
+        FROM submissions s
+        LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        WHERE s.submission_id = ?;
         """,
         (submission_id,),
     ).fetchone()
@@ -2502,21 +2518,37 @@ def calculate_plagiarism_for_submission(conn, submission_id: int) -> dict:
         return {}
 
     current_text = extract_archive_text(Path(submission["file_path"]))
+    owner_ids = [
+        value
+        for value in {str(submission["created_by"] or ""), str(submission["class_teacher_id"] or "")}
+        if value
+    ]
+    owner_filter = ""
+    owner_params: list[object] = []
+    if owner_ids:
+        placeholders = ", ".join("?" for _ in owner_ids)
+        owner_filter = (
+            f"OR (s.submit_time >= ? AND "
+            f"(a.created_by IN ({placeholders}) OR c.teacher_id IN ({placeholders})))"
+        )
+        owner_params = [plagiarism_cutoff_time(), *owner_ids, *owner_ids]
     candidates = conn.execute(
-        """
-        SELECT submission_id, student_id, assignment_id, file_path, submit_time
-        FROM submissions
-        WHERE submission_id != ?
+        f"""
+        SELECT s.submission_id, s.student_id, s.assignment_id, s.file_path, s.submit_time
+        FROM submissions s
+        LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        WHERE s.submission_id != ?
           AND (
-                assignment_id = ?
-                OR submit_time >= ?
+                s.assignment_id = ?
+                {owner_filter}
           )
-        ORDER BY submit_time DESC;
+        ORDER BY s.submit_time DESC;
         """,
         (
             submission_id,
             submission["assignment_id"],
-            plagiarism_cutoff_time(),
+            *owner_params,
         ),
     ).fetchall()
 
@@ -2664,6 +2696,7 @@ def config_peer_review(
         )
 
     p = req.payload
+    auth = resolved_auth(auth)
 
     if p.teacher_weight < 0 or p.peer_weight < 0:
         raise HTTPException(
@@ -2684,20 +2717,11 @@ def config_peer_review(
         )
 
     conn = get_conn()
-    row = conn.execute(
-        "SELECT assignment_id FROM assignments WHERE assignment_id = ?;",
-        (p.assignment_id,),
-    ).fetchone()
-
-    if row is None:
+    try:
+        ensure_teacher_can_update_assignment(conn, p.assignment_id, auth)
+    except Exception:
         conn.close()
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": 400,
-                "message": "assignment_id does not exist",
-            },
-        )
+        raise
 
     conn.execute(
         """
@@ -2776,7 +2800,13 @@ def set_peer_review_stage(
             status_code=400,
             detail={"code": 400, "message": "invalid peer review stage"},
         )
+    auth = resolved_auth(auth)
     conn = get_conn()
+    try:
+        ensure_teacher_can_update_assignment(conn, assignment_id, auth)
+    except Exception:
+        conn.close()
+        raise
     cur = conn.execute(
         "UPDATE assignments SET peer_review_stage = ? WHERE assignment_id = ?;",
         (stage, assignment_id),
@@ -2800,7 +2830,13 @@ def auto_assign_peer_review_tasks(
     assignment_id: str,
     auth: AuthContext | None = Depends(require_teacher),
 ):
+    auth = resolved_auth(auth)
     conn = get_conn()
+    try:
+        ensure_teacher_can_update_assignment(conn, assignment_id, auth)
+    except Exception:
+        conn.close()
+        raise
     rows = conn.execute(
         """
         SELECT submission_id, student_id, submit_time
@@ -3289,6 +3325,12 @@ def calculate_final_scores(
     """
     B 内部 / C 端触发：计算某个作业最终成绩。
     """
+    auth = resolved_auth(auth)
+    conn = get_conn()
+    try:
+        ensure_teacher_can_update_assignment(conn, assignment_id, auth)
+    finally:
+        conn.close()
     results = recalculate_assignment_scores(assignment_id)
 
     return {
@@ -3309,7 +3351,13 @@ def list_final_scores(
     """
     C / 老师端查看某个作业的最终成绩。
     """
+    auth = resolved_auth(auth)
     conn = get_conn()
+    try:
+        ensure_teacher_can_update_assignment(conn, assignment_id, auth)
+    except Exception:
+        conn.close()
+        raise
 
     rows = conn.execute(
         """
@@ -3354,7 +3402,13 @@ def list_assignment_plagiarism(
     Teacher-facing plagiarism report for one assignment.
     Reports are created automatically when submissions are accepted.
     """
+    auth = resolved_auth(auth)
     conn = get_conn()
+    try:
+        ensure_teacher_can_update_assignment(conn, assignment_id, auth)
+    except Exception:
+        conn.close()
+        raise
     rows = conn.execute(
         """
         SELECT
@@ -3394,6 +3448,7 @@ def get_submission_plagiarism(
     """
     Teacher-facing plagiarism report for one submission.
     """
+    auth = resolved_auth(auth)
     conn = get_conn()
     row = conn.execute(
         """
@@ -3413,9 +3468,9 @@ def get_submission_plagiarism(
         """,
         (submission_id,),
     ).fetchone()
-    conn.close()
 
     if row is None:
+        conn.close()
         raise HTTPException(
             status_code=404,
             detail={
@@ -3423,6 +3478,12 @@ def get_submission_plagiarism(
                 "message": "plagiarism report does not exist",
             },
         )
+    try:
+        ensure_teacher_can_update_assignment(conn, row["assignment_id"], auth)
+    except Exception:
+        conn.close()
+        raise
+    conn.close()
 
     return {
         "code": 200,
@@ -3440,7 +3501,13 @@ def get_assignment_score_stats(
     Teacher-facing score statistics for one assignment.
     Uses final_score when available, otherwise teacher score.
     """
+    auth = resolved_auth(auth)
     conn = get_conn()
+    try:
+        ensure_teacher_can_update_assignment(conn, assignment_id, auth)
+    except Exception:
+        conn.close()
+        raise
     rows = conn.execute(
         """
         SELECT
@@ -3513,9 +3580,15 @@ def get_student_score_history(
             raise create_auth_error("student can only query own score history", 403)
         effective_student_id = auth.display_id
 
+    where = ["s.student_id = ?", "s.score IS NOT NULL"]
+    params: list[object] = [effective_student_id]
+    if auth is not None and auth.role == ROLE_TEACHER:
+        where.append("(a.created_by = ? OR c.teacher_id = ?)")
+        params.extend([auth.display_id, auth.display_id])
+
     conn = get_conn()
     rows = conn.execute(
-        """
+        f"""
         SELECT
             s.submission_id,
             s.student_id,
@@ -3532,11 +3605,11 @@ def get_student_score_history(
             ROUND(COALESCE(s.final_score, s.score) * COALESCE(a.assignment_weight, 1.0), 2) AS weighted_score
         FROM submissions s
         LEFT JOIN assignments a ON s.assignment_id = a.assignment_id
-        WHERE s.student_id = ?
-          AND s.score IS NOT NULL
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        WHERE {" AND ".join(where)}
         ORDER BY s.submit_time ASC;
         """,
-        (effective_student_id,),
+        params,
     ).fetchall()
     conn.close()
 
@@ -3686,13 +3759,31 @@ def iter_submission_archive_files(archive_path: Path):
 
 
 def export_submission_files_to_zip(zipf, assignment_root: str) -> int:
+    return export_submission_files_to_zip_for_teacher(zipf, assignment_root, None)
+
+
+def export_submission_files_to_zip_for_teacher(
+    zipf,
+    assignment_root: str,
+    auth: AuthContext | None,
+) -> int:
     conn = get_conn()
+    where = []
+    params: list[object] = []
+    if auth is not None:
+        where.append("(a.created_by = ? OR c.teacher_id = ?)")
+        params.extend([auth.display_id, auth.display_id])
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     submissions = conn.execute(
-        """
-        SELECT submission_id, student_id, assignment_id, file_path
-        FROM submissions
-        ORDER BY submit_time ASC, submission_id ASC;
-        """
+        f"""
+        SELECT s.submission_id, s.student_id, s.assignment_id, s.file_path
+        FROM submissions s
+        LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        {where_sql}
+        ORDER BY s.submit_time ASC, s.submission_id ASC;
+        """,
+        params,
     ).fetchall()
     conn.close()
 
@@ -3721,13 +3812,27 @@ def export_submission_files_to_zip(zipf, assignment_root: str) -> int:
 
 
 def get_archive_assignment_root() -> str:
+    return get_archive_assignment_root_for_teacher(None)
+
+
+def get_archive_assignment_root_for_teacher(auth: AuthContext | None) -> str:
     conn = get_conn()
+    where = []
+    params: list[object] = []
+    if auth is not None:
+        where.append("(a.created_by = ? OR c.teacher_id = ?)")
+        params.extend([auth.display_id, auth.display_id])
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     rows = conn.execute(
-        """
-        SELECT DISTINCT assignment_id
-        FROM submissions
-        ORDER BY assignment_id ASC;
-        """
+        f"""
+        SELECT DISTINCT s.assignment_id
+        FROM submissions s
+        LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        {where_sql}
+        ORDER BY s.assignment_id ASC;
+        """,
+        params,
     ).fetchall()
     conn.close()
     assignment_ids = [sanitize_archive_component(str(row["assignment_id"])) for row in rows]
@@ -3737,9 +3842,18 @@ def get_archive_assignment_root() -> str:
 
 
 def build_assignment_score_rows() -> list[dict[str, object]]:
+    return build_assignment_score_rows_for_teacher(None)
+
+
+def build_assignment_score_rows_for_teacher(auth: AuthContext | None) -> list[dict[str, object]]:
     conn = get_conn()
+    where = ["s.score IS NOT NULL"]
+    params: list[object] = []
+    if auth is not None:
+        where.append("(a.created_by = ? OR c.teacher_id = ?)")
+        params.extend([auth.display_id, auth.display_id])
     rows = conn.execute(
-        """
+        f"""
         SELECT
             s.submission_id,
             s.student_id,
@@ -3756,17 +3870,23 @@ def build_assignment_score_rows() -> list[dict[str, object]]:
             s.submit_time
         FROM submissions s
         LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
-        WHERE s.score IS NOT NULL
+        LEFT JOIN classes c ON c.class_id = a.class_id
+        WHERE {" AND ".join(where)}
         ORDER BY s.student_id ASC, s.assignment_id ASC, s.submit_time ASC;
-        """
+        """,
+        params,
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
 def build_course_score_rows() -> list[dict[str, object]]:
+    return build_course_score_rows_for_teacher(None)
+
+
+def build_course_score_rows_for_teacher(auth: AuthContext | None) -> list[dict[str, object]]:
     by_student: dict[str, dict[str, object]] = {}
-    for row in build_assignment_score_rows():
+    for row in build_assignment_score_rows_for_teacher(auth):
         student_id = str(row["student_id"])
         effective_score = float(row["effective_score"])
         assignment_weight = float(row["assignment_weight"])
@@ -3795,7 +3915,11 @@ def build_course_score_rows() -> list[dict[str, object]]:
 
 
 def write_score_csvs_to_archive(zipf) -> None:
-    assignment_rows = build_assignment_score_rows()
+    write_score_csvs_to_archive_for_teacher(zipf, None)
+
+
+def write_score_csvs_to_archive_for_teacher(zipf, auth: AuthContext | None) -> None:
+    assignment_rows = build_assignment_score_rows_for_teacher(auth)
     assignment_buffer = io.StringIO()
     assignment_fields = [
         "submission_id",
@@ -3817,7 +3941,7 @@ def write_score_csvs_to_archive(zipf) -> None:
     writer.writerows(assignment_rows)
     zipf.writestr("scores/assignment_scores.csv", assignment_buffer.getvalue())
 
-    course_rows = build_course_score_rows()
+    course_rows = build_course_score_rows_for_teacher(auth)
     course_buffer = io.StringIO()
     course_fields = [
         "student_id",
@@ -3866,7 +3990,9 @@ def create_course_archive(
             },
         )
 
+    auth = resolved_auth(auth)
     p = req.payload
+    teacher_id = auth.display_id if auth is not None else ""
 
     if p.archive_name:
         archive_base = safe_name(p.archive_name)
@@ -3890,10 +4016,10 @@ def create_course_archive(
         )
 
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-        assignment_root = get_archive_assignment_root()
+        assignment_root = get_archive_assignment_root_for_teacher(auth)
         if p.include_submissions:
-            export_submission_files_to_zip(zipf, assignment_root)
-        write_score_csvs_to_archive(zipf)
+            export_submission_files_to_zip_for_teacher(zipf, assignment_root, auth)
+        write_score_csvs_to_archive_for_teacher(zipf, auth)
 
     conn = get_conn()
     conn.execute(
@@ -3902,14 +4028,16 @@ def create_course_archive(
             archive_name,
             archive_path,
             created_at,
+            teacher_id,
             note
         )
-        VALUES (?, ?, ?, ?);
+        VALUES (?, ?, ?, ?, ?);
         """,
         (
             archive_name,
             str(archive_path),
             now_str(),
+            teacher_id,
             p.note,
         ),
     )
@@ -3934,15 +4062,27 @@ def list_archives(
     """
     查看已经生成过的课程归档包。
     """
+    auth = resolved_auth(auth)
     conn = get_conn()
 
-    rows = conn.execute(
-        """
-        SELECT archive_id, archive_name, archive_path, created_at, note
-        FROM archives
-        ORDER BY created_at DESC;
-        """
-    ).fetchall()
+    if auth is not None:
+        rows = conn.execute(
+            """
+            SELECT archive_id, archive_name, archive_path, created_at, teacher_id, note
+            FROM archives
+            WHERE teacher_id = ?
+            ORDER BY created_at DESC;
+            """,
+            (auth.display_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT archive_id, archive_name, archive_path, created_at, teacher_id, note
+            FROM archives
+            ORDER BY created_at DESC;
+            """
+        ).fetchall()
 
     conn.close()
 
@@ -3963,15 +4103,45 @@ def download_archive(
     """
     下载课程归档 zip 文件。
     """
+    auth = resolved_auth(auth)
     archive_name = safe_name(archive_name)
-    archive_path = ARCHIVE_DIR / archive_name
+    conn = get_conn()
+    if auth is not None:
+        row = conn.execute(
+            """
+            SELECT archive_path
+            FROM archives
+            WHERE archive_name = ?
+              AND teacher_id = ?;
+            """,
+            (archive_name, auth.display_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT archive_path
+            FROM archives
+            WHERE archive_name = ?;
+            """,
+            (archive_name,),
+        ).fetchone()
+    conn.close()
 
-    if not archive_path.exists():
+    if row is None:
         raise HTTPException(
             status_code=400,
             detail={
                 "code": 400,
                 "message": "archive does not exist",
+            },
+        )
+    archive_path = Path(str(row["archive_path"]))
+    if not archive_path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": 400,
+                "message": "archive file is missing",
             },
         )
 
@@ -4739,6 +4909,7 @@ def check_plagiarism(
         )
 
     p = req.payload
+    auth = resolved_auth(auth)
     method = p.method.strip().lower()
 
     if method not in PLAGIARISM_METHODS:
@@ -4781,6 +4952,12 @@ def check_plagiarism(
     )
 
     conn = get_conn()
+    if auth is not None:
+        try:
+            ensure_teacher_can_update_assignment(conn, p.assignment_id, auth)
+        except Exception:
+            conn.close()
+            raise
 
     target_rows = conn.execute(
         """
@@ -4801,22 +4978,28 @@ def check_plagiarism(
 
     historical_rows = []
     if target_rows:
+        history_where = ["s.assignment_id != ?", "s.submit_time >= ?"]
+        history_params: list[object] = [p.assignment_id, plagiarism_cutoff_time()]
+        if auth is not None:
+            history_where.append("(a.created_by = ? OR c.teacher_id = ?)")
+            history_params.extend([auth.display_id, auth.display_id])
         historical_rows = conn.execute(
-            """
+            f"""
             SELECT
-                submission_id,
-                student_id,
-                assignment_id,
-                file_name,
-                file_path,
-                submit_time,
-                status
-            FROM submissions
-            WHERE assignment_id != ?
-              AND submit_time >= ?
-            ORDER BY submit_time DESC, submission_id ASC;
+                s.submission_id,
+                s.student_id,
+                s.assignment_id,
+                s.file_name,
+                s.file_path,
+                s.submit_time,
+                s.status
+            FROM submissions s
+            LEFT JOIN assignments a ON a.assignment_id = s.assignment_id
+            LEFT JOIN classes c ON c.class_id = a.class_id
+            WHERE {" AND ".join(history_where)}
+            ORDER BY s.submit_time DESC, s.submission_id ASC;
             """,
-            (p.assignment_id, plagiarism_cutoff_time()),
+            history_params,
         ).fetchall()
 
     def row_to_doc(row, *, is_target: bool) -> dict[str, object]:
@@ -5015,7 +5198,13 @@ def list_plagiarism_reports(
     """
     C / A -> B：查看某个作业的查重报告历史。
     """
+    auth = resolved_auth(auth)
     conn = get_conn()
+    try:
+        ensure_teacher_can_update_assignment(conn, assignment_id, auth)
+    except Exception:
+        conn.close()
+        raise
 
     rows = conn.execute(
         """

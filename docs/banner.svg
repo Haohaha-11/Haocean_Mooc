@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">Haocean Mooc CLI</title>
+  <desc id="desc">Banner for Haocean Mooc CLI, a course assignment command line platform for students and teachers.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="0.52" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#67e8f9" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#a7f3d0" stop-opacity="0.65"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="320" rx="0" fill="url(#bg)"/>
+  <path d="M0 236 C160 190 250 292 410 246 C575 198 665 190 820 236 C980 284 1070 214 1200 230 L1200 320 L0 320 Z" fill="url(#wave)" opacity="0.46"/>
+  <path d="M0 266 C145 230 270 294 420 270 C610 239 710 230 880 264 C1035 294 1118 252 1200 262 L1200 320 L0 320 Z" fill="#ecfeff" opacity="0.18"/>
+  <g transform="translate(84 76)">
+    <rect x="0" y="0" width="88" height="88" rx="20" fill="#ffffff" opacity="0.16"/>
+    <path d="M21 51 C33 29 55 24 69 39 C55 34 44 40 37 55 C32 66 23 67 13 61 C15 58 18 55 21 51 Z" fill="#d1fae5"/>
+    <path d="M22 35 C35 17 56 17 72 30 C56 26 43 31 34 45 C29 53 21 55 12 49 C15 44 18 39 22 35 Z" fill="#67e8f9"/>
+  </g>
+  <text x="204" y="118" fill="#ffffff" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="54" font-weight="800">Haocean Mooc CLI</text>
+  <text x="206" y="166" fill="#dff7ff" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="24" font-weight="500">Student submissions, teacher grading, AI review, plagiarism checks, and course archives.</text>
+  <g transform="translate(206 202)" fill="none" stroke="#e0f2fe" stroke-width="2" opacity="0.94">
+    <rect x="0" y="0" width="170" height="42" rx="8"/>
+    <rect x="194" y="0" width="172" height="42" rx="8"/>
+    <rect x="390" y="0" width="162" height="42" rx="8"/>
+  </g>
+  <g fill="#f8fafc" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="17" font-weight="700">
+    <text x="232" y="229">haocean-student</text>
+    <text x="428" y="229">haocean-teacher</text>
+    <text x="622" y="229">Module B API</text>
+  </g>
+</svg>

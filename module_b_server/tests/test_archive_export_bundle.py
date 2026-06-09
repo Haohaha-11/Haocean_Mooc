@@ -7,6 +7,8 @@ import tempfile
 import unittest
 import zipfile
 
+from fastapi import HTTPException
+
 from app import main
 
 
@@ -213,6 +215,96 @@ class ArchiveExportBundleTests(unittest.TestCase):
                 re.fullmatch(r"[A-Za-z0-9._-]+", base_name),
                 "exported file names should be safe for unzip on teacher machines",
             )
+
+    def test_course_archive_is_scoped_to_authenticated_teacher(self) -> None:
+        own_archive = self._build_submission_archive(
+            "own.tar.gz",
+            {"answer.py": b"print('own teacher')\n"},
+        )
+        other_archive = self._build_submission_archive(
+            "other.tar.gz",
+            {"answer.py": b"print('other teacher')\n"},
+        )
+
+        conn = main.get_conn()
+        for assignment_id, teacher_id in [("A_OWN", "T001"), ("A_OTHER", "T002")]:
+            conn.execute(
+                """
+                INSERT INTO assignments (
+                    assignment_id, title, description, deadline, created_by, created_at, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+                """,
+                (assignment_id, assignment_id, "", "", teacher_id, main.now_str(), "open"),
+            )
+        for student_id, assignment_id, archive_path, score in [
+            ("20240001", "A_OWN", own_archive, 95),
+            ("20240002", "A_OTHER", other_archive, 80),
+        ]:
+            conn.execute(
+                """
+                INSERT INTO submissions (
+                    student_id, assignment_id, file_name, file_path, md5,
+                    submit_time, status, score
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    student_id,
+                    assignment_id,
+                    archive_path.name,
+                    str(archive_path),
+                    f"md5-{student_id}",
+                    main.now_str(),
+                    "graded",
+                    score,
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        teacher_one = main.AuthContext(
+            email="t1@example.com",
+            role=main.ROLE_TEACHER,
+            display_id="T001",
+        )
+        teacher_two = main.AuthContext(
+            email="t2@example.com",
+            role=main.ROLE_TEACHER,
+            display_id="T002",
+        )
+
+        response = main.create_course_archive(
+            main.ArchiveRequest(
+                action="CREATE_COURSE_ARCHIVE",
+                timestamp=1,
+                payload=main.ArchivePayload(
+                    archive_name="teacher_one.zip",
+                    note="teacher one only",
+                    include_submissions=True,
+                ),
+            ),
+            auth=teacher_one,
+        )
+
+        zip_path = Path(response["payload"]["archive_path"])
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            assignment_scores = zf.read("scores/assignment_scores.csv").decode("utf-8")
+
+        self.assertTrue(any("A_OWN_20240001" in name for name in names))
+        self.assertFalse(any("A_OTHER_20240002" in name for name in names))
+        self.assertIn("A_OWN", assignment_scores)
+        self.assertNotIn("A_OTHER", assignment_scores)
+
+        own_archives = main.list_archives(auth=teacher_one)["payload"]["archives"]
+        other_archives = main.list_archives(auth=teacher_two)["payload"]["archives"]
+        self.assertEqual([item["archive_name"] for item in own_archives], ["teacher_one.zip"])
+        self.assertEqual(other_archives, [])
+
+        with self.assertRaises(HTTPException) as caught:
+            main.download_archive("teacher_one.zip", auth=teacher_two)
+        self.assertEqual(caught.exception.status_code, 400)
 
 
 if __name__ == "__main__":
