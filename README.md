@@ -208,7 +208,77 @@ haocean-teacher archive download 2026_spring.zip
 11. 学生 `feedback` 拉取 Markdown 反馈。
 12. 老师 `archive create` 生成课程归档。
 
-## 服务端和 AI 配置
+## AI Key 放在哪里
+
+AI 分两类，key 的位置不同：
+
+| 功能 | 谁调用 DeepSeek | key 放在哪里 |
+| --- | --- | --- |
+| 老师 TUI `g`：AI 自动审作业报告 | Module B 服务端 | 服务器的 `module_b_server/.env` 或服务进程环境变量 |
+| 老师 TUI `c` / `plagiarism --check --method hybrid`：AI 查重复核 | Module B 服务端 | 服务器的 `module_b_server/.env` 或服务进程环境变量 |
+| 学生/本机 `haocean ai-help` 使用小助手 | 当前学生或老师自己的终端 | 本机 shell 环境变量，例如 `~/.bashrc` |
+
+### 服务器配置：查重和 AI 审阅报告
+
+在部署 Module B 的服务器上配置，不需要发给老师或学生。仓库运行方式下推荐写入：
+
+```bash
+cd /Hao/gongchuang/module_b_server
+nano .env
+```
+
+示例：
+
+```dotenv
+MODULE_B_DEEPSEEK_API_KEY=your-deepseek-key
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_PREFILTER_SIMILARITY=0.45
+DEEPSEEK_MAX_CANDIDATE_PAIRS=12
+DEEPSEEK_MAX_CHARS_PER_SUBMISSION=8000
+DEEPSEEK_TIMEOUT_SECONDS=30
+```
+
+`DEEPSEEK_API_KEY` 也可以；如果两个都设置，服务端优先读 `DEEPSEEK_API_KEY`。如果使用 systemd、Docker 或云平台部署，也可以把同样的变量写到服务进程环境里。
+
+修改 key 后必须重启 Module B：
+
+```bash
+# 示例：手动 uvicorn 运行时，停止旧进程后重新启动
+cd /Hao/gongchuang/module_b_server
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+验证服务端是否读到 key：
+
+```bash
+curl http://127.0.0.1:8000/v1/health
+```
+
+返回里的 `deepseek_configured` 应该是 `true`。如果是 `false`：
+
+- 检查 `.env` 是否在 `module_b_server/.env`；
+- 检查变量名是否是 `MODULE_B_DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY`；
+- 检查是否已经重启 Module B。
+
+### 本机配置：`haocean ai-help`
+
+`haocean ai-help` 是本机使用小助手，和服务端查重/AI 审阅报告不是同一个 key 读取位置。学生或老师如果想在自己的终端调用 DeepSeek，可以在本机配置：
+
+```bash
+echo 'export DEEPSEEK_API_KEY=your-deepseek-key' >> ~/.bashrc
+source ~/.bashrc
+haocean ai-help "怎么提交作业？"
+```
+
+也可以使用别名变量：
+
+```bash
+export HAOCEAN_DEEPSEEK_API_KEY=your-deepseek-key
+```
+
+没有配置本机 key 时，`haocean ai-help` 会输出内置帮助，不影响提交、批改、查重和反馈。
+
+## 服务端配置
 
 服务端需要 Python 3.10+。本地开发常用：
 
@@ -220,7 +290,7 @@ cd module_b_server
 生产或真实演示需要确认：
 
 - SMTP 已配置，否则邮箱验证码无法发送。
-- `DEEPSEEK_API_KEY` 或 `MODULE_B_DEEPSEEK_API_KEY` 已配置，否则 hybrid/AI 查重会提示缺少 key。
+- 服务器上的 `DEEPSEEK_API_KEY` 或 `MODULE_B_DEEPSEEK_API_KEY` 已配置，否则 hybrid/AI 查重会提示缺少 key。
 - 学生端和教师端默认域名能访问同一个 Module B 服务。
 
 不要提交任何真实密钥、`.env`、运行时数据库、学生提交包或日志。

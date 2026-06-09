@@ -55,6 +55,16 @@ haocean ai-help --local "怎么提交作业？"
 
 `haocean-student` 是学生端正式命令；`haocean ai-help` 只用于打开 DeepSeek 使用小助手。没有配置 `DEEPSEEK_API_KEY` 时，小助手会使用内置本地帮助。
 
+如果学生希望 `haocean ai-help` 真正调用 DeepSeek，在学生自己的机器上配置环境变量即可：
+
+```bash
+echo 'export DEEPSEEK_API_KEY=your-deepseek-key' >> ~/.bashrc
+source ~/.bashrc
+haocean ai-help "怎么提交作业？"
+```
+
+也可以使用 `HAOCEAN_DEEPSEEK_API_KEY`。这只影响本机帮助命令，不影响提交作业；老师端 AI 查重和 AI 审阅报告使用的是服务器上的 Module B key。
+
 ## 3. 首次配置和登录
 
 使用默认学生端域名时，直接运行：

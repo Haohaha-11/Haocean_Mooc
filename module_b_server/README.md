@@ -277,16 +277,18 @@ unzip -l /tmp/downloaded_course_archive.zip | head -50
 8. `token` 模式下，相似度超过阈值则记录为疑似重复；
 9. `hybrid` / `ai` 模式下，只把本地预筛命中的候选对发给 DeepSeek，返回 AI 相似度、判断理由和证据点。
 
-DeepSeek 配置：
+DeepSeek 配置放在运行 Module B 的服务器上，不放在老师或学生电脑上。仓库运行方式下可以写入 `module_b_server/.env`，或者写入 systemd/Docker/云平台的服务进程环境变量：
 
 ```env
-DEEPSEEK_API_KEY=your-deepseek-key
+MODULE_B_DEEPSEEK_API_KEY=your-deepseek-key
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_PREFILTER_SIMILARITY=0.45
 DEEPSEEK_MAX_CANDIDATE_PAIRS=12
 DEEPSEEK_MAX_CHARS_PER_SUBMISSION=8000
 DEEPSEEK_TIMEOUT_SECONDS=30
 ```
+
+`DEEPSEEK_API_KEY` 也兼容；如果两个变量都设置，服务端优先读取 `DEEPSEEK_API_KEY`。修改后必须重启 Module B，可通过 `/v1/health` 的 `deepseek_configured` 字段确认是否生效。
 
 默认使用 `deepseek-v4-flash` 并关闭 V4 thinking 模式，优先保证批量查重速度和成本可控。
 

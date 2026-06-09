@@ -273,6 +273,21 @@ haocean-teacher download 21 --extract
 
 ## 9. 查看查重、统计和历史成绩
 
+AI 自动审阅报告和 hybrid AI 查重由 Module B 服务端调用 DeepSeek。老师电脑本地不需要放 key；需要在服务器的 `module_b_server/.env` 或服务进程环境变量里配置：
+
+```dotenv
+MODULE_B_DEEPSEEK_API_KEY=your-deepseek-key
+DEEPSEEK_MODEL=deepseek-v4-flash
+```
+
+修改后必须重启 Module B。可以让管理员在服务器上执行：
+
+```bash
+curl http://127.0.0.1:8000/v1/health
+```
+
+确认返回里的 `deepseek_configured` 为 `true`。否则 `plagiarism --check --method hybrid` 和 TUI `c` 会提示缺少 DeepSeek key；AI 自动审阅报告会退回本地结构化摘要。
+
 查看作业查重报告：
 
 ```bash

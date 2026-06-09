@@ -122,7 +122,14 @@ haocean ai-help "怎么提交作业？"
 haocean-student ai-help "怎么查看反馈？"
 ```
 
-未配置 `DEEPSEEK_API_KEY` 时，小助手会输出内置本地帮助摘要。
+`haocean ai-help` 读取当前学生机器上的 `DEEPSEEK_API_KEY` 或 `HAOCEAN_DEEPSEEK_API_KEY`。建议写入 `~/.bashrc`：
+
+```bash
+echo 'export DEEPSEEK_API_KEY=your-new-deepseek-key' >> ~/.bashrc
+source ~/.bashrc
+```
+
+未配置 key 时，小助手会输出内置本地帮助摘要。老师端 AI 查重和 AI 审阅报告不读取学生机器上的 key，它们读取服务器 Module B 的 `MODULE_B_DEEPSEEK_API_KEY` / `DEEPSEEK_API_KEY`。
 
 ## 配置
 
