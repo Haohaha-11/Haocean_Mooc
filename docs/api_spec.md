@@ -207,6 +207,13 @@ GET /v1/assignments/open
         "class_id": "cs101",
         "class_name": "CS101 Spring",
         "course_title": "Computer Science",
+        "assignment_weight": 1.0,
+        "has_materials": true,
+        "materials_file_name": "home_001_spec.pdf",
+        "materials_file_size": 20480,
+        "materials_md5": "8d777f385d3dfec8815d20f7496026dc",
+        "materials_uploaded_at": "2026-05-28 10:05:00",
+        "materials_download_url": "/v1/assignments/home_001/materials/download",
         "created_at": "2026-05-28 10:00:00",
         "status": "open"
       }
@@ -216,6 +223,52 @@ GET /v1/assignments/open
 ```
 
 启用认证时，学生只会看到全局作业以及自己已加入班级的开放作业；教师只会看到自己创建或自己班级下的开放作业。
+
+### 作业资料文件
+
+老师可以在创建作业后上传一个作业资料包。教师端 `--materials` 支持单个文件，也支持目录；目录会在教师端打包为 zip 后上传。
+
+上传或替换资料包：
+
+```http
+POST /v1/assignments/{assignment_id}/materials
+Content-Type: multipart/form-data
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `file` | file | 作业说明文件、附件包，或教师端打包后的 zip |
+
+成功响应：
+
+```json
+{
+  "code": 200,
+  "message": "assignment materials uploaded",
+  "payload": {
+    "assignment_id": "home_001",
+    "file_name": "home_001_spec.pdf",
+    "file_size": 20480,
+    "md5": "8d777f385d3dfec8815d20f7496026dc",
+    "uploaded_at": "2026-05-28 10:05:00",
+    "download_url": "/v1/assignments/home_001/materials/download"
+  }
+}
+```
+
+查询资料包元数据：
+
+```http
+GET /v1/assignments/{assignment_id}/materials
+```
+
+下载资料包：
+
+```http
+GET /v1/assignments/{assignment_id}/materials/download
+```
+
+启用认证时，老师只能上传自己创建或自己班级下作业的资料；学生只能下载全局作业或自己已加入班级作业的资料。
 
 ## 6. 提交作业
 

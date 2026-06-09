@@ -69,6 +69,12 @@ haocean-student join JOIN101
 haocean-student list
 ```
 
+如果作业带资料包，先下载老师发布的说明文件和附件：
+
+```bash
+haocean-student materials home_001
+```
+
 查看已加入班级：
 
 ```bash

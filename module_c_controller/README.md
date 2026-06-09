@@ -72,6 +72,13 @@ haocean-teacher select
 haocean-teacher publish
 ```
 
+发布作业时可附带说明文件或附件目录：
+
+```bash
+haocean-teacher publish home_001 "Homework 1" --materials ./home_001_spec.pdf
+haocean-teacher publish home_002 "Homework 2" --materials ./home_002_materials/
+```
+
 查看自己已发布的开放作业：
 
 ```bash
