@@ -263,7 +263,7 @@ class Settings:
     current_class_id: str = ""
     auth_token: str = ""
     auth_token_file: Path = field(default_factory=lambda: default_config_dir() / "auth_token")
-    request_timeout_seconds: float = 10.0
+    request_timeout_seconds: float = 60.0
 
 
 def _float_env(name: str, default: float) -> float:
@@ -383,5 +383,5 @@ def load_settings(
             project_root,
             "MODULE_C_AUTH_TOKEN_FILE",
         ),
-        request_timeout_seconds=_float_env("CONTROLLER_REQUEST_TIMEOUT_SECONDS", 10.0),
+        request_timeout_seconds=_float_env("CONTROLLER_REQUEST_TIMEOUT_SECONDS", 60.0),
     )

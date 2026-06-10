@@ -96,7 +96,7 @@ class ModuleBClient:
         self,
         server_url: str,
         auth_token: str = "",
-        timeout: float = 10.0,
+        timeout: float = 60.0,
         retry_count: int = 3,
         retry_backoff_seconds: float = 1.0,
         session: requests.Session | None = None,

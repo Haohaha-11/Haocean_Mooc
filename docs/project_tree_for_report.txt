@@ -1,0 +1,99 @@
+gongchuang/
+├── README.md                         # 项目总览、安装与使用入口
+├── Makefile                          # test / verify / smoke 等自动化入口
+├── install-student.sh                # 学生端 GitHub 安装脚本
+├── install-teacher.sh                # 教师端 GitHub 安装脚本
+├── install-all.sh                    # 学生端与教师端组合安装脚本
+├── uninstall.sh                      # 本地 CLI 卸载脚本
+├── docs/
+│   ├── api_spec.md                   # Module A/B/C API 契约与接口说明
+│   ├── banner.svg                    # README / 展示用横幅
+│   ├── domain_auth_smoke.md          # DNS、Caddy/HTTPS、认证 smoke 说明
+│   ├── experiment_report.md          # 实验报告草稿
+│   ├── local_student_usage_guide.md  # 本机学生端测试指南
+│   ├── local_teacher_usage_guide.md  # 本机教师端测试指南
+│   ├── ppt_outline.md                # PPT 内容提纲
+│   ├── project_spec_and_progress.md  # 项目规格、进度与验收口径
+│   ├── student_usage_guide.md        # 面向学生的安装与使用指南
+│   ├── teacher_usage_guide.md        # 面向教师的安装与使用指南
+│   ├── project_tree_for_report.txt   # 本文件：报告用目录树
+│   └── report_audit_material.md      # 报告事实核查材料
+├── module_a_client/
+│   ├── README.md                     # 学生端说明
+│   ├── pyproject.toml                # 包名与入口：haocean、haocean-student
+│   ├── requirements.txt              # 学生端依赖
+│   ├── module_a/
+│   │   ├── main.py                   # 学生端 CLI 主入口
+│   │   ├── ai_help.py                # 本机 AI 使用小助手
+│   │   ├── api_client.py             # 调用 Module B 的 HTTP 客户端
+│   │   ├── archive.py                # 作业预览、过滤、打包逻辑
+│   │   ├── auth.py                   # 学生验证码登录与 token 缓存
+│   │   ├── config.py                 # 本地配置、profile、环境变量读取
+│   │   ├── feedback.py               # 反馈 Markdown 保存
+│   │   ├── logger.py                 # 学生端日志配置
+│   │   └── watcher.py                # 工作区轮询、防抖、自动提交
+│   ├── scripts/
+│   │   └── run_client.py             # 开发模式学生端入口
+│   └── tests/
+│       ├── test_ai_help.py           # AI help 参数、fallback、DeepSeek 请求测试
+│       ├── test_api_client.py        # 学生端 HTTP 客户端测试
+│       ├── test_archive.py           # 作业过滤、预览、打包测试
+│       ├── test_auth.py              # 登录启动、profile 选择测试
+│       ├── test_config.py            # 配置和 profile 迁移测试
+│       ├── test_feedback.py          # 反馈保存测试
+│       └── test_watcher.py           # watcher 快照、防抖、提交测试
+├── module_b_server/
+│   ├── README.md                     # 服务端说明
+│   ├── requirements.txt              # 服务端依赖
+│   ├── app/
+│   │   └── main.py                   # FastAPI 服务端主实现
+│   ├── scripts/
+│   │   └── smoke_test.sh             # Module B 主链路 smoke test
+│   └── tests/
+│       ├── test_archive_export_bundle.py   # 教师归档过滤与权限测试
+│       ├── test_auth_flow.py               # 验证码登录测试
+│       ├── test_classes_and_download.py    # 班级、材料、下载、重复提交、截止时间测试
+│       ├── test_grade_pending_guard.py     # 重复评分/更新评分策略测试
+│       └── test_plagiarism_and_stats.py    # 查重、AI 审阅、统计、互评、最终成绩测试
+├── module_c_controller/
+│   ├── README.md                     # 教师端说明
+│   ├── pyproject.toml                # 包名与入口：haocean-teacher
+│   ├── requirements.txt              # 教师端依赖
+│   ├── controller/
+│   │   ├── main.py                   # 教师端 CLI 主入口
+│   │   ├── api_client.py             # 教师端调用 Module B 的 HTTP 客户端
+│   │   ├── auth.py                   # 教师验证码登录与 token 缓存
+│   │   ├── config.py                 # 教师端配置、profile、环境变量读取
+│   │   ├── db.py                     # 本地 SQLite mock 数据库支持
+│   │   ├── feedback.py               # 本地 mock 反馈生成
+│   │   ├── models.py                 # 提交等模型
+│   │   ├── repository.py             # 数据源抽象
+│   │   ├── sqlite_repo.py            # 本地 SQLite mock repository
+│   │   ├── status.py                 # 状态映射
+│   │   └── tui.py                    # Textual 批改 TUI
+│   ├── docs/
+│   │   ├── demo.md                   # TUI 演示流程
+│   │   ├── module_b_api_contract.md  # C 与 B 的 HTTP 契约
+│   │   └── module_c_handoff.md       # 模块 C 交接说明
+│   ├── scripts/
+│   │   ├── init_mock_db.py           # 初始化本地 mock 数据
+│   │   └── run_controller.py         # 开发模式教师端入口
+│   └── tests/
+│       ├── test_api_client.py        # 教师端 HTTP 客户端测试
+│       ├── test_auth.py              # 登录、profile、交互入口测试
+│       ├── test_config.py            # 配置和 profile 测试
+│       ├── test_db.py                # 本地 mock 数据库测试
+│       ├── test_feedback.py          # mock 反馈生成测试
+│       ├── test_review_flow.py       # 本地 review flow 测试
+│       └── test_tui.py               # TUI 解包安全与可读文件选择测试
+├── module_d_ops/
+│   ├── README.md                     # 运维验收说明
+│   └── scripts/
+│       └── verify_all.sh             # 一键 verify：测试、B smoke、A->B 提交
+├── cowork/group/                     # 小组协作文档
+├── haojiang/                         # 个人开发计划材料
+└── 阅读/需求文档/                    # 原始需求、任务说明、协作规范等参考材料
+
+说明：
+- 本目录树用于实验报告材料整理，已排除 .git、__pycache__、.pytest_cache、venv/.venv、node_modules、logs、data、临时数据库、压缩包和大文件。
+- `module_a_client/workspace/`、`module_a_client/feedback_inbox/`、`module_b_server/data/`、`module_c_controller/feedback_outbox/` 等运行时数据未列入主目录树，避免误认为源码交付内容。

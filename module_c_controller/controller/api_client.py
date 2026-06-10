@@ -55,7 +55,7 @@ class ModuleBRepository:
         base_url: str,
         teacher_id: str,
         auth_token: str = "",
-        timeout: float = 10.0,
+        timeout: float = 60.0,
         session: requests.Session | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")

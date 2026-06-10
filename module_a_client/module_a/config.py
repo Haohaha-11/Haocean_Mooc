@@ -305,7 +305,7 @@ class Settings:
     log_path: Path = field(default_factory=lambda: default_config_dir() / "logs" / "haocean.log")
     debounce_seconds: float = 3.0
     poll_interval_seconds: float = 1.0
-    request_timeout_seconds: float = 10.0
+    request_timeout_seconds: float = 60.0
     retry_count: int = 3
     retry_backoff_seconds: float = 1.0
 
@@ -426,7 +426,7 @@ def load_settings(
         ),
         debounce_seconds=_float_env("MODULE_A_DEBOUNCE_SECONDS", 3.0),
         poll_interval_seconds=_float_env("MODULE_A_POLL_INTERVAL_SECONDS", 1.0),
-        request_timeout_seconds=_float_env("MODULE_A_REQUEST_TIMEOUT_SECONDS", 10.0),
+        request_timeout_seconds=_float_env("MODULE_A_REQUEST_TIMEOUT_SECONDS", 60.0),
         retry_count=_int_env("MODULE_A_RETRY_COUNT", 3),
         retry_backoff_seconds=_float_env("MODULE_A_RETRY_BACKOFF_SECONDS", 1.0),
     )

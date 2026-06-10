@@ -9,7 +9,7 @@
 | `CONTROLLER_SOURCE` | `sqlite` 或 `http` | `sqlite` |
 | `CONTROLLER_API_BASE_URL` | 模块 B 服务地址 | `http://127.0.0.1:8000` |
 | `CONTROLLER_TEACHER_ID` | 批改教师 ID | `T001` |
-| `CONTROLLER_REQUEST_TIMEOUT_SECONDS` | HTTP 请求超时秒数 | `10` |
+| `CONTROLLER_REQUEST_TIMEOUT_SECONDS` | HTTP 请求超时秒数 | `60` |
 
 正式联调示例：
 
